@@ -61,26 +61,28 @@ _LARGE_SPARSE_NUM_ELEMENTS = 100000000
 class GradientsInfo(object):
   """Gradients Information.
   """
-  def __init__(self, targets=None, grads=None, gradients_info_def=None, import_scope=None):
+  def __init__(self, target=None, grad=None, gradients_info_def=None, import_scope=None):
     """Create a GradientsInfo.
+
     Args:
-      targets: Optional list of tensors which is used for differentiation.
-      grads : Optional list of tensors(gradients). grads[i] is the gradient of targets[i].
+      target: Optional tensor which is used for differentiation.
+      grad : Optional gradient tensor of target.
       gradients_info_def: Optional `GradientsInfoDef` protocol buffer. If specified,
         recreates the GradientsInfo from its contents. `gradients_info_def` and the
         other arguments are mutually exclusive.
       import_scope: Optional `string`. Name scope to add. Only used when
         initializing from protocol buffer.
+
     Raises:
-      ValueError: If both `gradients_info_def` and `targets` are both specified.
+      ValueError: If both `gradients_info_def` and `target` are both specified.
     """
-    if gradients_info_def and targets is not None:
-      raise ValueError("gradients_info_def and targets are "
+    if gradients_info_def and target is not None:
+      raise ValueError("gradients_info_def and target are "
                        "mutually exclusive.")
     if gradients_info_def:
       self._init_from_proto(gradients_info_def, import_scope=import_scope)
     else:
-      self._init_from_args(targets, grads)
+      self._init_from_args(target, grad)
 
   def _get_tensor_from_proto(self, tensor_info, import_scope):
     g = ops.get_default_graph()
@@ -101,39 +103,36 @@ class GradientsInfo(object):
 
   def _init_from_proto(self, gradients_info_def, import_scope=None):
     """Creates a GradientsInfo from 'GradientsInfoDef'.
+
     Args:
       gradients_info_def: Optional `GradientsInfoDef` protocol buffer. If specified,
         recreates the GradientsInfo from its contents. `gradients_info_def` and the
         other arguments are mutually exclusive.
       import_scope: Optional `string`. Name scope to add. Only used when
         initializing from protocol buffer.
-    
+
     Raises:
       ValueError: If the numbers of target_tensor_info and grad_tensor_info are different.
     """
     assert isinstance(
         gradients_info_def, gradients_info_pb2.GradientsInfoDef)
-  
+
     # Create from gradients_info_def.
-    self._targets = [self._get_tensor_from_proto(t, import_scope)
-                         for t in gradients_info_def.target_tensor_info]
-    self._grads = [self._get_tensor_from_proto(t, import_scope)
-                         for t in gradients_info_def.grad_tensor_info]
+    self._target = self._get_tensor_from_proto(gradients_info_def.target_tensor_info, import_scope)
+    self._grad = self._get_tensor_from_proto(gradients_info_def.grad_tensor_info, import_scope)
 
-    if len(self._targets) != len(self._grads):
-      raise ValueError("target_tensor_info and grad_tensor_info "
-                       "must be a pair in the order.")
-
-  def _init_from_args(self, targets, grads):
+  def _init_from_args(self, target, grad):
     """Create a GradientsInfo from arguments.
+
     Args:
-      targets: Optional List of tensors which is used for differentiation.
-      grads : Optional List of tensors(gradients). grads[i] is the gradient of targets[i].
+      target: Optional tensor which is used for differentiation.
+      grad : Optional gradient tensor of target.
+
     Raises:
       ValueError: If the numbers of target_tensor_name and grad_tensor_name are different.
     """
-    self._targets = targets
-    self._grads = grads    
+    self._target = target
+    self._grad = grad
 
   def _set_tensor_info_from_tensor(self, tensor_info_def, tensor, export_scope):
     if isinstance(tensor, ops.Tensor):
@@ -149,26 +148,27 @@ class GradientsInfo(object):
 
   def to_proto(self, export_scope=None):
     """Converts this `GradientsInfo` to a `GradientsInfoDef` protocol buffer.
+
     Args:
       export_scope: Optional `string`. Name scope to remove.
+
     Returns:
       A `GradientsInfoDef` protocol buffer, or `None` if the `Variable` is not in
       the specified name scope.
     """
-   
+
     gradients_info_def = gradients_info_pb2.GradientsInfoDef()
-    for i in range(len(self._targets)):
-      target = self._targets[i]
-      grad = self._grads[i]
-      if (export_scope is not None and 
-        (not target.name.startswith(export_scope) or not grad.name.startswith(export_scope))):
-        return None
-      target_tensor_info_def = gradients_info_def.target_tensor_info.add()
-      self._set_tensor_info_from_tensor(target_tensor_info_def, target, export_scope)
-      grad_tensor_info_def = gradients_info_def.grad_tensor_info.add()
-      self._set_tensor_info_from_tensor(grad_tensor_info_def, grad, export_scope)
-    return gradients_info_def 
-  
+    target = self._target
+    grad = self._grad
+    if (export_scope is not None and
+      (not target.name.startswith(export_scope) or not grad.name.startswith(export_scope))):
+      return None
+    target_tensor_info_def = gradients_info_def.target_tensor_info
+    self._set_tensor_info_from_tensor(target_tensor_info_def, target, export_scope)
+    grad_tensor_info_def = gradients_info_def.grad_tensor_info
+    self._set_tensor_info_from_tensor(grad_tensor_info_def, grad, export_scope)
+    return gradients_info_def
+
   @staticmethod
   def from_proto(gradients_info_def, import_scope=None):
     """Returns a `GradientsInfo` object created from `gradients_info_def`."""
@@ -772,10 +772,10 @@ def gradients(ys,
   if loop_state:
     loop_state.PostProcessing()
   res_grads = [_GetGrad(grads, x) for x in xs]
-  gi = GradientsInfo(targets=xs, grads=res_grads)
-  ops.add_to_collection(ops.GraphKeys.GRADIENTS_INFO, gi)
+  for (x, grad) in zip(xs, res_grads):
+    gi = GradientsInfo(target=x, grad=grad)
+    ops.add_to_collection(ops.GraphKeys.GRADIENTS_INFO, gi)
   return res_grads
-
 
 def _HasAnyNotNoneGrads(grads, op):
   """Return true iff op has real gradient."""
