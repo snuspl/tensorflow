@@ -1442,7 +1442,7 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
     return gen_data_flow_ops.sparse_accumulator_take_gradient(
         self._accumulator_ref, num_required, average_option=average_option, dtype=self._dtype, name=name)
 
-  def take_indexed_slices_grad(self, num_required, average_option=1, name=None):
+  def take_indexed_slices_grad(self, num_required, average_option=2, name=None):
     """Attempts to extract the average gradient from the accumulator.
 
     The operation blocks until sufficient number of gradients have been
