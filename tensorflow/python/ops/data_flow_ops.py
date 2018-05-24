@@ -1418,7 +1418,7 @@ class SparseConditionalAccumulator(ConditionalAccumulatorBase):
         has_known_shape=(grad_shape is not None),
         name=name)
 
-  def take_grad(self, num_required, average_option=1, name=None):
+  def take_grad(self, num_required, average_option=2, name=None):
     """Attempts to extract the average gradient from the accumulator.
 
     The operation blocks until sufficient number of gradients have been
