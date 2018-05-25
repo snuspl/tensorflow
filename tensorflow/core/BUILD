@@ -192,6 +192,7 @@ CORE_PROTO_SRCS = [
     "protobuf/cluster.proto",
     "protobuf/debug.proto",
     "protobuf/device_properties.proto",
+    "protobuf/gradients_info.proto",
     "protobuf/queue_runner.proto",
     "protobuf/rewriter_config.proto",
     "protobuf/tensor_bundle.proto",
