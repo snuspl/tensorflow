@@ -28,9 +28,12 @@ template <typename Device, typename T>
 class SparseConditionalAccumulatorOp : public ConditionalAccumulatorBaseOp {
  public:
   explicit SparseConditionalAccumulatorOp(OpKernelConstruction* context)
-      : ConditionalAccumulatorBaseOp(context) {}
+      : ConditionalAccumulatorBaseOp(context) {
+    context->GetAttr("average_option", &average_option_);
+  }
 
  protected:
+  int average_option_;
   Creator GetCreator() const override {
     return [this](ConditionalAccumulatorBase** ret) {
       SparseConditionalAccumulator<Device, T>* accumulator =
@@ -40,6 +43,28 @@ class SparseConditionalAccumulatorOp : public ConditionalAccumulatorBaseOp {
       return Status::OK();
     };
   }
+  
+  void ComputeAsync(OpKernelContext* ctx, 
+                    ConditionalAccumulatorBase* accumulator, 
+                    DoneCallback callback) override { 
+     // Check signature 
+     CheckSignature(ctx, accumulator, callback); 
+ 
+     // Get input num_required 
+     const Tensor* num_required_tensor; 
+     OP_REQUIRES_OK_ASYNC(ctx, ctx->input("num_required", &num_required_tensor), 
+                          callback); 
+     if (!TensorShapeUtils::IsScalar(num_required_tensor->shape())) { 
+       ctx->CtxFailureWithWarning(errors::InvalidArgument( 
+           "Argument num_required must be scalar, but had bad shape ", 
+       num_required_tensor->shape().DebugString())); 
+       callback(); 
+     } 
+ 
+    // Actually try to take gradient now 
+    accumulator->TryTakeGrad(num_required_tensor->scalar<int32>()(), ctx, 
+                             callback, average_option_); 
+   }
 
   TF_DISALLOW_COPY_AND_ASSIGN(SparseConditionalAccumulatorOp);
 };

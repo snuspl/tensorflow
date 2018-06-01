@@ -4773,6 +4773,9 @@ class GraphKeys(object):
   # NOTE(yuanbyu): internal and experimental.
   _STREAMING_MODEL_PORTS = "streaming_model_ports"
 
+  # Key for gradients information
+  GRADIENTS_INFO = "gradients_info"  
+
   @decorator_utils.classproperty
   def VARIABLES(cls):  # pylint: disable=no-self-argument
     logging.warning("VARIABLES collection name is deprecated, "
