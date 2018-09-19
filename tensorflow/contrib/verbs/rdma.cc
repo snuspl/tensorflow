@@ -17,6 +17,7 @@ limitations under the License.
 
 #include <fcntl.h>
 #include <cstdlib>
+#include <signal.h>
 
 #include "tensorflow/contrib/verbs/rdma.h"
 #include "tensorflow/contrib/verbs/verbs_service.pb.h"
@@ -450,10 +451,17 @@ void RdmaAdapter::Process_CQ() {
         ibv_poll_cq(cq_, params_.queue_depth * 2, wc_);
     CHECK_GE(ne, 0);
     for (int i = 0; i < ne; ++i) {
-      CHECK(wc_[i].status == IBV_WC_SUCCESS)
-          << "Failed status \n"
+      // Handle local protection error
+      if (wc_[i].status != IBV_WC_SUCCESS) {
+          LOG(INFO) << "Failed status \n"
           << ibv_wc_status_str(wc_[i].status) << " " << wc_[i].status << " "
           << static_cast<int>(wc_[i].wr_id) << " " << wc_[i].vendor_err;
+
+          pid_t pid, pgid;
+          pid = getpid();
+          pgid = getpgid(pid);
+          killpg(pgid, SIGKILL);
+      }
       if (wc_[i].opcode == IBV_WC_RECV_RDMA_WITH_IMM) {
         RdmaChannel* rc = reinterpret_cast<RdmaChannel*>(wc_[i].wr_id);
         // put back a recv wr.
