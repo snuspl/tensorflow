@@ -490,6 +490,9 @@ void RdmaAdapter::Process_CQ() {
         if (rm.type_ == RDMA_MESSAGE_TENSOR_REQUEST) {
           RdmaTensorResponse* response = rc->AddTensorResponse(rm);
           response->Start();
+        } else if (rm.type_ == RDMA_MESSAGE_TENSOR_READY_TIME) {
+          RdmaTensorRequest* request = rc->GetTensorRequest(rm.request_index_);
+          request->RecvTensorReadyTime(rm.tensor_ready_time_);
         } else if (rm.type_ == RDMA_MESSAGE_META_DATA_UPDATE) {
           RdmaTensorRequest* request = rc->GetTensorRequest(rm.request_index_);
           request->RecvTensorMetaData(rm.data_type_, rm.tensor_shape_,
@@ -670,14 +673,15 @@ void RdmaChannel::Recv() {
 RdmaTensorRequest* RdmaChannel::InsertTensorRequest(
     const string& key, int64 step_id, Device* dst_dev,
     const Rendezvous::Args recv_args,
-    const RdmaTensorRequest::RecvDoneCallback& done) {
+    const RdmaTensorRequest::RecvDoneCallback& done,
+    const bool is_logging_active) {
   mutex_lock lock{ct_mu_};
   uint32_t request_index = request_serial_++;
   if (request_serial_ > RDMA_IMM_MAX_REQUEST_ID) {
     request_serial_ = 0;
   }
   RdmaTensorRequest request(request_index, key, step_id, this, dst_dev,
-                            recv_args, done);
+                            recv_args, done, is_logging_active);
   auto it = request_table_.emplace(request_index, request);
   return &it.first->second;
 }
@@ -1047,6 +1051,10 @@ void RdmaTensorResponse::RecvHandler(Rendezvous::ParsedKey parsed,
     return;
   }
 
+  if (is_logging_active_) {
+    SendTensorReadyTime(is_dead);
+  }
+  
   meta_data_changed_ = TensorMetaDataChanged(in, is_dead);
 #ifdef RDMA_DATA_VALIDATION
   // Always send a meta data message with the source checksum
@@ -1193,6 +1201,26 @@ void RdmaTensorResponse::SendMetaData(const Tensor& in,
   channel_->tx_message_buffer_->SendNextItem();
 }
 
+void RdmaTensorResponse::SendTensorReadyTime(bool is_dead) {
+  // Send meta-data update:
+  RdmaMessage rm;
+  rm.type_ = RDMA_MESSAGE_TENSOR_READY_TIME;
+  rm.is_dead_ = is_dead;
+  rm.request_index_ = rm_.request_index_;
+  rm.tensor_ready_time_ = Env::Default()->NowMicros();
+#ifdef RDMA_DATA_VALIDATION
+  rm.checksum_ = checksum_;
+#endif
+  RDMA_LOG(1) << "Step 0x" << std::hex << rm.step_id_ << std::dec
+              << ": Sending RDMA_MESSAGE_TENSOR_READY_TIME#"
+              << rm.request_index_ << ": " << rm.name_
+              << " is-dead = " << rm.is_dead_ << ")";
+
+  string message = RdmaMessage::CreateMessage(rm);
+  channel_->tx_message_buffer_->EnqueueItem(message);
+  channel_->tx_message_buffer_->SendNextItem();
+}
+
 void RdmaTensorResponse::SendContent(const Tensor& in, const TensorProto& proto,
                                      bool is_dead) {
   bool can_memcpy = DataTypeCanUseMemcpy(in.dtype());
@@ -1311,6 +1339,11 @@ string RdmaMessage::CreateMessage(const RdmaMessage& rm) {
     memcpy(&message[kRkeyStartIndex], &rm.rkey_, sizeof(rm.rkey_));
     memcpy(&message[kStepIdStartIndex], &rm.step_id_, sizeof(rm.step_id_));
   }
+
+  if (rm.type_ == RDMA_MESSAGE_TENSOR_REQUEST) {
+    memcpy(&message[kIsLoggingActiveStartIndex], &rm.is_logging_active_, sizeof(rm.is_logging_active_));
+  }
+
   // is_dead, data_type, tensor_shape, tensor_bytes
   if ((rm.type_ == RDMA_MESSAGE_TENSOR_REQUEST) ||
       (rm.type_ == RDMA_MESSAGE_META_DATA_UPDATE) ||
@@ -1323,6 +1356,12 @@ string RdmaMessage::CreateMessage(const RdmaMessage& rm) {
            sizeof(rm.tensor_shape_));
     memcpy(&message[kTensorBytesStartIndex], &rm.tensor_bytes_,
            sizeof(rm.tensor_bytes_));
+  }
+
+  if (rm.type_ == RDMA_MESSAGE_TENSOR_READY_TIME) {
+    memcpy(&message[kIsDeadStartIndex], &rm.is_dead_, sizeof(rm.is_dead_));
+    memcpy(&message[kTensorReadyTimeStartIndex], &rm.tensor_ready_time_,
+           sizeof(rm.tensor_ready_time_));
   }
   // checksum
 #ifdef RDMA_DATA_VALIDATION
@@ -1347,6 +1386,7 @@ string RdmaMessage::CreateMessage(const RdmaMessage& rm) {
     gsProto.SerializeToArray(&message[kErrorStatusStartIndex + 4], gsProtoSize);
     message_size += gsProtoSize + 4;
   }
+
   return string(message, message_size);
 }
 
@@ -1374,6 +1414,11 @@ void RdmaMessage::ParseMessage(RdmaMessage& rm, void* buffer) {
     memcpy(&rm.rkey_, &message[kRkeyStartIndex], sizeof(rm.rkey_));
     memcpy(&rm.step_id_, &message[kStepIdStartIndex], sizeof(rm.step_id_));
   }
+
+  if (rm.type_ == RDMA_MESSAGE_TENSOR_REQUEST) {
+    memcpy(&rm.is_logging_active_, &message[kIsLoggingActiveStartIndex], sizeof(rm.is_logging_active_));
+  }
+
   // data_type, tensor_bytes, tensor_shape, is_dead
   if ((rm.type_ == RDMA_MESSAGE_TENSOR_REQUEST) ||
       (rm.type_ == RDMA_MESSAGE_META_DATA_UPDATE) ||
@@ -1385,6 +1430,12 @@ void RdmaMessage::ParseMessage(RdmaMessage& rm, void* buffer) {
            sizeof(rm.tensor_shape_));
     memcpy(&rm.tensor_bytes_, &message[kTensorBytesStartIndex],
            sizeof(rm.tensor_bytes_));
+  }
+
+  if (rm.type_ == RDMA_MESSAGE_TENSOR_READY_TIME) {
+    memcpy(&rm.is_dead_, &message[kIsDeadStartIndex], sizeof(rm.is_dead_));
+    memcpy(&rm.tensor_ready_time_, &message[kTensorReadyTimeStartIndex],
+           sizeof(rm.tensor_ready_time_));
   }
   // checksum
 #ifdef RDMA_DATA_VALIDATION
@@ -1476,7 +1527,7 @@ const TensorMetaData* RdmaMemoryMgr::SetTensorMetaData(
 RdmaTensorRequest::RdmaTensorRequest(
     uint32_t index, const string& key, int64 step_id, RdmaChannel* channel,
     Device* dst_dev, const Rendezvous::Args recv_args,
-    const RdmaTensorRequest::RecvDoneCallback& done)
+    const RdmaTensorRequest::RecvDoneCallback& done, bool is_logging_active)
     : index_(index),
       key_(key),
       step_id_(step_id),
@@ -1488,7 +1539,9 @@ RdmaTensorRequest::RdmaTensorRequest(
       proxy_tensor_(nullptr),
       rdma_addr_(nullptr),
       mr_(nullptr),
-      done_(done) {}
+      done_(done),
+      is_logging_active_(is_logging_active),
+      tensor_ready_time_(0) {}
 
 RdmaTensorRequest::~RdmaTensorRequest() { DeallocateTensors(); }
 
@@ -1512,7 +1565,7 @@ void RdmaTensorRequest::Done(const Status& s) {
   RecvDoneCallback done = done_;
   DeallocateTensors();
   channel_->RemoveTensorRequest(index_);
-  done(s, Rendezvous::Args(), recv_args, val, is_dead);
+  done(s, Rendezvous::Args(), recv_args, val, is_dead, tensor_ready_time_);
 }
 
 void RdmaTensorRequest::DeallocateTensors() {
@@ -1593,6 +1646,7 @@ void RdmaTensorRequest::Send(RdmaMessageType message_type) {
     rm.data_type_ = DT_INVALID;
   }
   rm.rkey_ = (mr_ == nullptr) ? 0 : mr_->rkey;
+  rm.is_logging_active_ = is_logging_active_;
 
   RDMA_LOG(1) << "Step 0x" << std::hex << rm.step_id_ << std::dec
               << ": Sending  " << MessageTypeToString(message_type) << " #"
@@ -1602,6 +1656,10 @@ void RdmaTensorRequest::Send(RdmaMessageType message_type) {
   string message = RdmaMessage::CreateMessage(rm);
   rb->EnqueueItem(message);
   rb->SendNextItem();
+}
+
+void RdmaTensorRequest::RecvTensorReadyTime(uint64_t tensor_ready_time) {
+  tensor_ready_time_ = tensor_ready_time;
 }
 
 void RdmaTensorRequest::RecvTensorMetaData(DataType dtype, TensorShape shape,

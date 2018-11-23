@@ -49,6 +49,11 @@ namespace tensorflow {
 #define RDMA_LOG_2 VLOG(2)
 #define RDMA_LOG(LEVEL) RDMA_LOG_##LEVEL
 
+typedef std::function<void(const Status&, const Rendezvous::Args&, 
+                           const Rendezvous::Args&, const Tensor&,
+                           const bool, const uint64_t)>
+RdmaDoneCallback;
+
 struct RdmaParams {
   uint8_t port_num;
   uint8_t sgid_index;
@@ -78,6 +83,7 @@ enum Location { local, remote };
 
 enum RdmaMessageType {
   RDMA_MESSAGE_META_DATA_UPDATE,
+  RDMA_MESSAGE_TENSOR_READY_TIME,
   RDMA_MESSAGE_TENSOR_RE_REQUEST,
   RDMA_MESSAGE_TENSOR_REQUEST,
   RDMA_MESSAGE_ERROR_STATUS,
@@ -100,14 +106,18 @@ struct RdmaMessage {
   DataType data_type_;
   TensorShape tensor_shape_;
   size_t tensor_bytes_;
+  bool is_logging_active_;
+  uint64_t tensor_ready_time_;
 
   // For error status:
   Status status_;
 
   // type|name_size|name|step_id|request_index|remote_addr/checksum|rkey|...
   //   1B|    2B   | 512|  8B   |     8B      |       8B           | 4B |...
-  // ...|is_dead|data_type|tensor_shape|tensor_bytes|error_status          |
-  // ...|    1B |   XB    |    XB      |    8B      |size - 4B, proto - XB |
+  // ...|is_dead|data_type|tensor_shape|tensor_bytes|is_logging_active|...
+  // ...|    1B |   XB    |    XB      |    8B      |      1B         |...
+  // ...|tensor_ready_time|error_status          |
+  // ...|       8B        |size - 4B, proto - XB |
   static const size_t kNameCapacity = 512;
   static const size_t kTypeStartIndex = 0;
   static const size_t kNameSizeStartIndex = kTypeStartIndex + sizeof(type_);
@@ -128,8 +138,12 @@ struct RdmaMessage {
       kDataTypeStartIndex + sizeof(data_type_);
   static const size_t kTensorBytesStartIndex =
       kTensorShapeStartIndex + sizeof(TensorShape);
-  static const size_t kErrorStatusStartIndex =
+  static const size_t kIsLoggingActiveStartIndex =
       kTensorBytesStartIndex + sizeof(tensor_bytes_);
+  static const size_t kTensorReadyTimeStartIndex = 
+      kIsLoggingActiveStartIndex + sizeof(is_logging_active_);
+  static const size_t kErrorStatusStartIndex =
+      kTensorReadyTimeStartIndex + sizeof(tensor_ready_time_);
   static const size_t kErrorStatusMaxSize = 4096;
 
   static const size_t kMessageTotalBytes = kErrorStatusStartIndex;
@@ -233,13 +247,14 @@ class RdmaMemoryMgr {
 // Represents a single tensor request.
 class RdmaTensorRequest {
  public:
-  typedef Rendezvous::DoneCallback RecvDoneCallback;
+  typedef RdmaDoneCallback RecvDoneCallback;
 
   // Creates a tensor request identified by index.
   RdmaTensorRequest(uint32_t index, const string& key, int64 step_id,
                     RdmaChannel* channel, Device* dst_dev,
                     const Rendezvous::Args recv_args,
-                    const RecvDoneCallback& done);
+                    const RecvDoneCallback& done,
+                    const bool is_logging_active);
   ~RdmaTensorRequest();
 
   // Request unique index.
@@ -250,6 +265,8 @@ class RdmaTensorRequest {
   // 1. Allocate the result tensor (and proxy tensor if required).
   // 2. Send RDMA_MESSAGE_TENSOR_REQUEST to the remote side.
   void Start();
+
+  void RecvTensorReadyTime(uint64_t tensor_ready_time);
 
   // Receive tensor meta-data.
   //
@@ -301,6 +318,8 @@ class RdmaTensorRequest {
 #ifdef RDMA_DATA_VALIDATION
   uint64_t checksum_;
 #endif
+  bool is_logging_active_;
+  uint64_t tensor_ready_time_;
 };
 
 // RdmaTensorResponse
@@ -309,7 +328,9 @@ class RdmaTensorResponse {
  public:
   // Creates a response for request message.
   RdmaTensorResponse(RdmaChannel* channel, const RdmaMessage& rm)
-      : channel_(channel), rm_(rm) {}
+      : channel_(channel), rm_(rm) {
+    is_logging_active_ = rm.is_logging_active_;
+  }
 
   void Update(const RdmaMessage& rm) { rm_ = rm; }
 
@@ -346,6 +367,7 @@ class RdmaTensorResponse {
   Status PrepareRecvTensor(const Rendezvous::ParsedKey& parsed,
                            Device** src_dev);
   void SendMetaData(const Tensor& in, const TensorProto& proto, bool is_dead);
+  void SendTensorReadyTime(bool is_dead);
   void SendContent(const Tensor& in, const TensorProto& proto, bool is_dead);
   void SendErrorStatus(const Status& status);
 
@@ -357,6 +379,7 @@ class RdmaTensorResponse {
   ibv_mr* mr_ = nullptr;
   uint64_t checksum_ = 0;
   bool meta_data_changed_ = false;
+  bool is_logging_active_ = false;
 
   // Re-item:
   TensorProto* proto_ = nullptr;
@@ -431,7 +454,8 @@ class RdmaChannel {
   RdmaTensorRequest* InsertTensorRequest(
       const string& key, int64 step_id, Device* dst_dev,
       const Rendezvous::Args recv_args,
-      const RdmaTensorRequest::RecvDoneCallback& done);
+      const RdmaTensorRequest::RecvDoneCallback& done,
+      const bool is_logging_active);
   void RemoveTensorRequest(uint32_t request_index);
   RdmaTensorRequest* GetTensorRequest(uint32_t request_index);
 
