@@ -148,7 +148,46 @@ Status Conv2DGrad(const AttrSlice& attrs, FunctionDef* g) {
   // clang-format on
   return Status::OK();
 }
+
 REGISTER_OP_GRADIENT("Conv2D", Conv2DGrad);
+
+Status Conv2DSlowGrad(const AttrSlice& attrs, FunctionDef* g) {
+  // clang-format off
+  *g = FDH::Define(
+    // Arg defs
+    {"input: T", "filter: T", "grad: T"},
+    // Ret val defs
+    {"input_grad: T", "filter_grad: T"},
+    // Attr defs
+    {"slow_iter: int",
+     "T: {float, double}",
+     "strides: list(int)",
+     "use_cudnn_on_gpu: bool = true",
+     GetPaddingAttrString(),
+     GetConvnetDataFormatAttrString()},
+    // Nodes
+    {
+      {{"i_shape"}, "Shape", {"input"}, {{"T", "$T"}}},
+      {{"input_grad"}, "Conv2DBackpropInput", {"i_shape", "filter", "grad"},
+       /*Attrs=*/{{"T", "$T"},
+                  {"strides", "$strides"},
+                  {"padding", "$padding"},
+                  {"data_format", "$data_format"},
+                  {"use_cudnn_on_gpu", "$use_cudnn_on_gpu"}}},
+
+      {{"f_shape"}, "Shape", {"filter"}, {{"T", "$T"}}},
+      {{"filter_grad"}, "Conv2DBackpropFilter", {"input", "f_shape", "grad"},
+       /*Attrs=*/{{"T", "$T"},
+                  {"strides", "$strides"},
+                  {"padding", "$padding"},
+                  {"data_format", "$data_format"},
+                  {"use_cudnn_on_gpu", "$use_cudnn_on_gpu"}}},
+    });
+  // clang-format on
+  return Status::OK();
+}
+
+REGISTER_OP_GRADIENT("Conv2DSlow", Conv2DSlowGrad);
 
 Status MaxPoolGrad(const AttrSlice& attrs, FunctionDef* g) {
   // clang-format off

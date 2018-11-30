@@ -526,6 +526,34 @@ def _Conv2DGrad(op, grad):
           data_format=data_format)
   ]
 
+@ops.RegisterGradient("Conv2DSlow")
+def _Conv2DSlowGrad(op, grad):
+  dilations = op.get_attr("dilations")
+  strides = op.get_attr("strides")
+  padding = op.get_attr("padding")
+  use_cudnn_on_gpu = op.get_attr("use_cudnn_on_gpu")
+  data_format = op.get_attr("data_format")
+  shape_0, shape_1 = array_ops.shape_n([op.inputs[0], op.inputs[1]])
+  return [
+      nn_ops.conv2d_backprop_input(
+          shape_0,
+          op.inputs[1],
+          grad,
+          dilations=dilations,
+          strides=strides,
+          padding=padding,
+          use_cudnn_on_gpu=use_cudnn_on_gpu,
+          data_format=data_format),
+      nn_ops.conv2d_backprop_filter(
+          op.inputs[0],
+          shape_1,
+          grad,
+          dilations=dilations,
+          strides=strides,
+          padding=padding,
+          use_cudnn_on_gpu=use_cudnn_on_gpu,
+          data_format=data_format)
+  ]
 
 @ops.RegisterGradient("DepthwiseConv2dNative")
 def _DepthwiseConv2dNativeGrad(op, grad):

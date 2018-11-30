@@ -3353,6 +3353,7 @@ tf_kernel_library(
         "conv_grad_ops.cc",
         "conv_grad_ops_3d.cc",
         "deep_conv2d.cc",
+        "conv2d_slow_op.cc",
     ] + select({
         ":xsmm_convolutions": ["xsmm_conv2d.cc"],
         "//conditions:default": [],

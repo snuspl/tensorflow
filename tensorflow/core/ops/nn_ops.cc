@@ -274,6 +274,20 @@ REGISTER_OP("Conv2D")
     .Attr("dilations: list(int) = [1, 1, 1, 1]")
     .SetShapeFn(shape_inference::Conv2DShape);
 
+REGISTER_OP("Conv2DSlow")
+    .Input("input: T")
+    .Input("filter: T")
+    .Output("output: T")
+    .Attr("slow_iter: int")
+    .Attr("T: {half, bfloat16, float, double}")
+    .Attr("strides: list(int)")
+    .Attr("use_cudnn_on_gpu: bool = true")
+    .Attr(GetPaddingAttrString())
+    .Attr(GetConvnetDataFormatAttrString())
+    .Attr("dilations: list(int) = [1, 1, 1, 1]")
+    .SetShapeFn(shape_inference::Conv2DShape);
+
+
 REGISTER_OP("Conv2DBackpropInput")
     .Input("input_sizes: int32")
     .Input("filter: T")
