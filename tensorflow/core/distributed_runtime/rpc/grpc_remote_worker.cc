@@ -16,6 +16,7 @@ limitations under the License.
 #include "tensorflow/core/distributed_runtime/rpc/grpc_remote_worker.h"
 
 #include <utility>
+#include <unistd.h>
 
 #include "grpcpp/generic/generic_stub.h"
 #include "grpcpp/grpcpp.h"
@@ -158,6 +159,12 @@ class GrpcRemoteWorker : public WorkerInterface {
     } else {
       wrapper_done = [this, request, response, done, start_usec](Status s) {
         if (logger_->LoggingActive()) {
+          const string& key = request->rendezvous_key();
+          std::vector<string> key_parts = str_util::Split(key, ';');
+          if (key_parts[3].find("AutoParallel-Div/gradients/AddN_168") != std::string::npos) {
+	    unsigned int microseconds = 2000000;
+	    usleep(microseconds);
+          }
           int64 end_usec = Env::Default()->NowMicros();
           int64 step_id = request->step_id();
           int64 bytes = response->tensor().TotalBytes();
@@ -181,8 +188,6 @@ class GrpcRemoteWorker : public WorkerInterface {
                 static_cast<int64>(response->metadata().send_start_micros()));
             send_start_usec = std::min(send_start_usec, end_usec - 1);
           }
-          const string& key = request->rendezvous_key();
-          std::vector<string> key_parts = str_util::Split(key, ';');
           if (key_parts.size() != 5) {
             LOG(WARNING) << "Bad key: " << key;
           } else {
