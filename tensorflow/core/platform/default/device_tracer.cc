@@ -577,13 +577,8 @@ Status DeviceTracerImpl::Collect(StepStatsCollector *collector) {
     return errors::FailedPrecondition("DeviceTracer is still enabled.");
   }
 
-  // TODO(pbar) Handle device IDs and prefix properly.
-  const string prefix = "";
-  const int id = 0;
-  const string stream_device =
-      strings::StrCat(prefix, "/device:GPU:", id, "/stream:");
-  const string memcpy_device =
-      strings::StrCat(prefix, "/device:GPU:", id, "/memcpy");
+  string stream_device;
+  string memcpy_device;
 
   mutex_lock l2(trace_mu_);
   for (const auto &rec : kernel_records_) {
@@ -602,6 +597,7 @@ Status DeviceTracerImpl::Collect(StepStatsCollector *collector) {
     // ns->set_timeline_label(details);
     auto nscopy = new NodeExecStats;
     *nscopy = *ns;
+    stream_device = strings::StrCat("/device:GPU:", rec.device_id, "/stream:");
     collector->Save(strings::StrCat(stream_device, "all"), ns);
     collector->Save(strings::StrCat(stream_device, rec.stream_id), nscopy);
   }
@@ -627,8 +623,9 @@ Status DeviceTracerImpl::Collect(StepStatsCollector *collector) {
     ns->set_timeline_label(details);
     auto nscopy = new NodeExecStats;
     *nscopy = *ns;
-    collector->Save(memcpy_device, ns);
-    collector->Save(strings::StrCat(stream_device, rec.stream_id), nscopy);
+    memcpy_device = strings::StrCat("/device:GPU:", rec.device_id, "/memcpy:");
+    collector->Save(strings::StrCat(memcpy_device, "all"), ns);
+    collector->Save(strings::StrCat(memcpy_device, rec.stream_id), nscopy);
   }
   return Status::OK();
 }
