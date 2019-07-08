@@ -2326,6 +2326,7 @@ void ExecutorState::Finish() {
     // the user until the step (and its side-effects) has actually completed.
     status = impl_->params_.device->Sync();
   }
+  tracing::SetTraceCollector(nullptr);
   delete this;
   CHECK(done_cb != nullptr);
   runner([=]() { done_cb(status); });
