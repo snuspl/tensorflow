@@ -2057,6 +2057,28 @@ REGISTER_OP("ListDiff")
       return Status::OK();
     });
 
+REGISTER_OP("ListDiffWithLeftover")
+    .Input("x: T")
+    .Input("y: T")
+    .Output("out: T")
+    .Output("idx: out_idx")
+    .Output("out_leftover: T")
+    .Output("idx_leftover: out_idx")
+    .Attr("T: type")
+    .Attr("out_idx: {int32, int64} = DT_INT32")
+    .SetShapeFn([](InferenceContext* c) {
+      ShapeHandle unused;
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(0), 1, &unused));
+      TF_RETURN_IF_ERROR(c->WithRank(c->input(1), 1, &unused));
+      // TODO(mrry): Indicate that the length falls within an interval?
+      ShapeHandle out = c->Vector(InferenceContext::kUnknownDim);
+      c->set_output(0, out);
+      c->set_output(1, out);
+      c->set_output(2, out);
+      c->set_output(3, out);
+      return Status::OK();
+    });
+
 namespace {
 
 // Converts Tensor to flat std::vector<int64>.

@@ -1,4 +1,4 @@
-# Description:
+#Description:
 # Op kernel implementations for TensorFlow.
 #
 # Note: Any test that uses GPU support and which we would like to
@@ -953,6 +953,7 @@ cc_library(
         ":identity_op",
         ":inplace_ops",
         ":listdiff_op",
+	":listdiffwithleftover_op",
         ":matrix_band_part_op",
         ":matrix_diag_op",
         ":matrix_set_diag_op",
@@ -1083,6 +1084,12 @@ tf_kernel_library(
 tf_kernel_library(
     name = "listdiff_op",
     prefix = "listdiff_op",
+    deps = ARRAY_DEPS,
+)
+
+tf_kernel_library(
+    name = "listdiffwithleftover_op",
+    prefix = "listdiffwithleftover_op",
     deps = ARRAY_DEPS,
 )
 
@@ -6064,6 +6071,7 @@ filegroup(
         "fused_eigen_output_kernels.cc",
         "fused_eigen_output_kernels.h",
         "listdiff_op.cc",
+	"listdiff_with_leftover_op.cc",
         "population_count_op.cc",
         "population_count_op.h",
         "winograd_transform.h",
