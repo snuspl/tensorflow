@@ -773,7 +773,7 @@ Status OpKernelContext::allocate_persistent(DataType type,
     if (track_allocations()) {
       Tensor* t = out_persistent->AccessTensor(this);
       Allocator* a = get_allocator(attr);
-      if (a->TracksAllocationSizes()) {
+      if (a->TracksAllocationSizes() && t->tensor_data().data()) {
         int64 alloc_size = a->AllocatedSize(t->tensor_data().data());
         int64 alloc_id = a->AllocationId(t->tensor_data().data());
         record_persistent_memory_allocation(alloc_size, alloc_id);
