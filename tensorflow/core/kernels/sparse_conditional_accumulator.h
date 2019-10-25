@@ -68,6 +68,12 @@ class SparseConditionalAccumulator
     if (count_element_ != nullptr) delete count_element_;
     if (accum_val_persistent_ != nullptr) delete accum_val_persistent_;
     // Do not delete accum_val_! Will be automatically garbage collected
+    
+    for ( std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it= (*accum_idx_val_val_persistent_map_).begin() ; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it ) {
+    	if ( it->second.second != nullptr) delete it->second.second;
+    }
+    (*accum_idx_val_val_persistent_map_).clear();
+    if (accum_idx_val_val_persistent_map_ != nullptr) delete accum_idx_val_val_persistent_map_;
   };
 
  protected:
