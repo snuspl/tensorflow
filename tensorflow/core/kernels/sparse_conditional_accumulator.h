@@ -17,6 +17,7 @@ limitations under the License.
 #define TENSORFLOW_CORE_KERNELS_SPARSE_CONDITIONAL_ACCUMULATOR_H_
 
 #include "tensorflow/core/kernels/typed_conditional_accumulator_base.h"
+#include <map>
 
 namespace tensorflow {
 
@@ -58,6 +59,8 @@ class SparseConditionalAccumulator
     count_element_ = nullptr;
     accum_val_ = nullptr;
     accum_val_persistent_ = new PersistentTensor();
+
+    accum_idx_val_val_persistent_map_ = new std::map<int64, std::pair<Tensor*, PersistentTensor*>>();
   }
 
   ~SparseConditionalAccumulator() override {
@@ -73,6 +76,8 @@ class SparseConditionalAccumulator
 
   Tensor* accum_val_ = nullptr;
   PersistentTensor* accum_val_persistent_ = nullptr;
+
+  std::map<int64, std::pair<Tensor*, PersistentTensor*>>* accum_idx_val_val_persistent_map_ = nullptr;
 
   typedef Eigen::TensorMap<Eigen::Tensor<T, 1, Eigen::RowMajor>,
                            Eigen::Unaligned>
@@ -178,6 +183,9 @@ class SparseConditionalAccumulator
         .IgnoreError();
     accum_val_->flat<T>().device(ctx->template eigen_device<Device>()) =
         grad_val->flat<T>();
+
+    if (accum_idx_val_val_persistent_map_ != nullptr) delete accum_idx_val_val_persistent_map_;
+    accum_idx_val_val_persistent_map_ = new std::map<int64, std::pair<Tensor*, PersistentTensor*>>();
 
     // Assign count_element_
     if (count_element_ != nullptr) {
