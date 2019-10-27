@@ -145,6 +145,20 @@ class SparseConditionalAccumulator
                                          ", got ", tensor_val->dim_size(i));
         }
       }
+      Tensor* accum_map_val_first_ = (*accum_idx_val_val_persistent_map_).begin()->second.first;
+      // Note that the new tensor's shape is also a matrix which has one column
+      int64 accum_val_map_dims = accum_map_val_first_->dims();
+      if (accum_val_map_dims != grad_val_dims) {
+        return errors::InvalidArgument("Shape mismatch: expected values rank ",
+                                       accum_val_map_dims, ", got ", grad_val_dims, "**CAUSED IN MAP IMPLEMENTATION**");
+      }
+      for (int64 i = 1; i < accum_val_map_dims; i++) {
+        if (accum_map_val_first_->dim_size(i) != tensor_val->dim_size(i)) {
+          return errors::InvalidArgument("Shape mismatch: expected values dim ",
+                                         i, " to be ", accum_map_val_first_->dim_size(i),
+                                         ", got ", tensor_val->dim_size(i), "**CAUSED IN MAP IMPLEMENTATION**");
+        }
+      }
     } else {
       // If there are no accumulated gradients, check against shape_
       if (shape_.dims() > grad_dims) {
@@ -195,6 +209,11 @@ class SparseConditionalAccumulator
 
     TensorShape tensor_shape = grad_val->shape();
     tensor_shape.set_dim(0, 1);
+
+    auto grad_flat = grad_val->flat_outer_dims<T>();
+
+    const int num_col = grad_flat.dimension(1);
+    Eigen::array<long, 2> extent = {1, num_col};
  
     for(int i = 0; i < nnz; i++) {
         Tensor* temp_accum_val_ = nullptr;
@@ -202,8 +221,10 @@ class SparseConditionalAccumulator
         ctx->allocate_persistent(dtype_, tensor_shape, temp_accum_val_persistent_,
                              &temp_accum_val_)
             .IgnoreError();
+        
+        Eigen::array<long, 2> offset = {i, 0};
         temp_accum_val_->flat<T>().device(ctx->template eigen_device<Device>()) =
-            grad_val->flat<T>();
+            grad_flat.slice(offset, extent).reshape(Eigen::array<long, 2>{1, num_col});
 
         (*accum_idx_val_val_persistent_map_)[grad_idx->vec<int64>()(i)] = std::make_pair(temp_accum_val_, temp_accum_val_persistent_); 
     }
@@ -228,6 +249,8 @@ class SparseConditionalAccumulator
 
     const int64 accum_nnz = accum_idx_vec_->size();
     const int64 grad_nnz = grad_idx->dim_size(0);
+
+    const int64 accum_map_nnz = accum_idx_val_val_persistent_map_->size();
 
     // Source enumerates the origin of a non-zero element: whether it is from
     // the new gradient, the accumulated gradient, or the sum of both.
@@ -274,6 +297,12 @@ class SparseConditionalAccumulator
       ++j;
     }
 
+    i = 0;
+    j = 0;
+
+    while (i < accum_map_nnz) {
+        i++;
+    }
     // (2) Copy or sum the non-zero elements into sum_indices and sum_tensor
     std::vector<int64>* sum_indices_vec = new std::vector<int64>();
     sum_indices_vec->reserve(sum_nnz);
