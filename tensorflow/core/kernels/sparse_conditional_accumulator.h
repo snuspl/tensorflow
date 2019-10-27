@@ -224,7 +224,7 @@ class SparseConditionalAccumulator
         
         Eigen::array<long, 2> offset = {i, 0};
         temp_accum_val_->flat<T>().device(ctx->template eigen_device<Device>()) =
-            grad_flat.slice(offset, extent).reshape(Eigen::array<long, 2>{1, num_col});
+            grad_flat.slice(offset, extent).reshape(Eigen::array<long, 2>({1, num_col}));
 
         (*accum_idx_val_val_persistent_map_)[grad_idx->vec<int64>()(i)] = std::make_pair(temp_accum_val_, temp_accum_val_persistent_); 
     }
