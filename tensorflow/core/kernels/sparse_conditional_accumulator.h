@@ -193,6 +193,21 @@ class SparseConditionalAccumulator
     if (accum_idx_val_val_persistent_map_ != nullptr) delete accum_idx_val_val_persistent_map_;
     accum_idx_val_val_persistent_map_ = new std::map<int64, std::pair<Tensor*, PersistentTensor*>>();
 
+    TensorShape tensor_shape = grad_val->shape();
+    tensor_shape.set_dim(0, 1);
+ 
+    for(int i = 0; i < nnz; i++) {
+        Tensor* temp_accum_val_ = nullptr;
+        PersistentTensor* temp_accum_val_persistent_ = new PersistentTensor();
+        ctx->allocate_persistent(dtype_, tensor_shape, temp_accum_val_persistent_,
+                             &temp_accum_val_)
+            .IgnoreError();
+        temp_accum_val_->flat<T>().device(ctx->template eigen_device<Device>()) =
+            grad_val->flat<T>();
+
+        (*accum_idx_val_val_persistent_map_)[grad_idx->vec<int64>()(i)] = std::make_pair(temp_accum_val_, temp_accum_val_persistent_); 
+    }
+
     // Assign count_element_
     if (count_element_ != nullptr) {
       delete count_element_;
