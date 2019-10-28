@@ -378,7 +378,37 @@ class SparseConditionalAccumulator
 
   void DivideAccumGradByCounter(OpKernelContext* ctx, int average_option) override
       EXCLUSIVE_LOCKS_REQUIRED(this->mu_) {
-    const int64 nnz = count_element_->size();
+    //const int64 nnz = count_element_->size();
+    const int64 nnz = accum_idx_val_val_persistent_map_->size();
+
+    Tensor* accum_val_tensor_ = nullptr;
+    Tensor* accum_map_val_first_ = (*accum_idx_val_val_persistent_map_).begin()->second.first;
+    TensorShape accum_val_shape = accum_map_val_first_->shape();
+    accum_val_shape.set_dim(0, nnz);
+    PersistentTensor* tensor_accum_val_persistent = new PersistentTensor();
+    OP_REQUIRES_OK(
+        ctx, ctx->allocate_persistent(dtype_, accum_val_shape, tensor_accum_val_persistent,
+                                      &accum_val_tensor_));
+
+    //auto accum_val_flat = accum_val_->flat_outer_dims<T>();
+    auto accum_val_flat = accum_val_tensor_->flat_outer_dims<T>();
+    const int64 num_col = (accum_map_val_first_->flat_outer_dims<T>()).dimension(1);
+
+    Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
+
+    {
+        std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
+        int i;
+        for ( it = (*accum_idx_val_val_persistent_map_).begin(), i = 0 ; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i ) {
+            T* accum_val_slice_ptr = &accum_val_flat(i, 0);
+            SliceT accum_val_slice(accum_val_slice_ptr, slice_shape);
+
+            T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
+            SliceT accum_slice(accum_slice_ptr, slice_shape);
+            accum_val_slice = accum_slice;
+        }
+    }
+
     auto accum_flat = accum_val_->flat_outer_dims<T>();
     std::vector<T> count_typet;
     std::transform(count_element_->begin(), count_element_->end(),
@@ -483,24 +513,65 @@ class SparseConditionalAccumulator
 
   inline bool ReturnIdxTensor(OpKernelContext* ctx) {
     Tensor* idx_tensor;
-    const int64 nnz = accum_idx_vec_->size();
+    //const int64 nnz = accum_idx_vec_->size();
+    const int64 nnz = accum_idx_val_val_persistent_map_->size();
     OP_REQUIRES_OK_BOOLEAN(ctx, ctx->allocate_output(0, {nnz}, &idx_tensor));
     // If allocate_output fails, OP_REQUIRES_OK_BOOLEAN will short-circuit
     // the remaining code and just return false
     auto idx_tensor_vec = idx_tensor->vec<int64>();
     for (int i = 0; i < nnz; ++i) {
       idx_tensor_vec(i) = accum_idx_vec_->at(i);
+    } 
+    {
+        std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
+        int i;
+        for ( it = (*accum_idx_val_val_persistent_map_).begin(), i = 0 ; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i ) {
+            idx_tensor_vec(i) = it->first;
+        }
     }
     return true;
   }
 
   inline bool ReturnValTensor(OpKernelContext* ctx) {
-    ctx->set_output(1, *accum_val_);
+    //ctx->set_output(1, *accum_val_);
+
+    Tensor* accum_val_tensor = nullptr;
+
+    const int64 nnz = accum_idx_val_val_persistent_map_->size();
+
+    Tensor* accum_map_val_first_ = (*accum_idx_val_val_persistent_map_).begin()->second.first;
+    TensorShape accum_val_shape = accum_map_val_first_->shape();
+
+    accum_val_shape.set_dim(0, nnz);
+
+    OP_REQUIRES_OK_BOOLEAN(ctx, ctx->allocate_output(1, accum_val_shape, &accum_val_tensor));
+
+    auto accum_val_flat = accum_val_tensor->flat_outer_dims<T>();
+
+    const int64 num_col = (accum_map_val_first_->flat_outer_dims<T>()).dimension(1);
+
+    Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
+
+    {
+        std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
+        int i;
+        for ( it = (*accum_idx_val_val_persistent_map_).begin(), i = 0 ; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i ) {
+            T* accum_val_slice_ptr = &accum_val_flat(i, 0);
+            SliceT accum_val_slice(accum_val_slice_ptr, slice_shape);
+
+            T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
+            SliceT accum_slice(accum_slice_ptr, slice_shape);
+            accum_val_slice = accum_slice;
+        }
+    }
+
     return true;
   }
 
   inline bool ReturnShapeTensor(OpKernelContext* ctx) {
     int64 accum_val_dims = accum_val_->dims();
+    Tensor* accum_map_val_first_ = (*accum_idx_val_val_persistent_map_).begin()->second.first;
+    int64 accum_val_map_dims = accum_map_val_first_->dims();
     Tensor* shape_tensor;
     OP_REQUIRES_OK_BOOLEAN(
         ctx, ctx->allocate_output(2, {accum_val_dims}, &shape_tensor));
@@ -512,6 +583,9 @@ class SparseConditionalAccumulator
         (shape_.dims() > 0) ? shape_.dim_size(0) : -1;
     for (int64 i = 1; i < accum_val_dims; i++) {
       shape_tensor->flat<int64>()(i) = accum_val_->dim_size(i);
+    }
+    for (int64 i = 1; i < accum_val_map_dims; i++) {
+      shape_tensor->flat<int64>()(i) = accum_map_val_first_->dim_size(i);
     }
     return true;
   }
