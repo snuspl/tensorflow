@@ -394,9 +394,8 @@ class SparseConditionalAccumulator
     auto accum_val_flat = accum_val_tensor_->flat_outer_dims<T>();
     const int64 num_col = (accum_map_val_first_->flat_outer_dims<T>()).dimension(1);
 
-    Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
-
     {
+        Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
         std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
         int i;
         for ( it = (*accum_idx_val_val_persistent_map_).begin(), i = 0 ; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i ) {
@@ -405,11 +404,12 @@ class SparseConditionalAccumulator
 
             T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
             SliceT accum_slice(accum_slice_ptr, slice_shape);
-            accum_val_slice = accum_slice;
+            accum_val_slice.device(ctx->template eigen_device<Device>()) = accum_slice;
         }
     }
 
-    auto accum_flat = accum_val_->flat_outer_dims<T>();
+    //auto accum_flat = accum_val_->flat_outer_dims<T>();
+    auto accum_flat = accum_val_tensor_->flat_outer_dims<T>();
     std::vector<T> count_typet;
     std::transform(count_element_->begin(), count_element_->end(),
                    std::back_inserter(count_typet),
@@ -434,6 +434,23 @@ class SparseConditionalAccumulator
             accum_slice / count_typet[i];
         }
       break;
+    }
+    //accum_val_tensor_ -> map
+    
+    //below assignment might not be needed
+    accum_val_flat = accum_val_tensor_->flat_outer_dims<T>();
+    {
+        Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
+        std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
+        int i;
+        for ( it = (*accum_idx_val_val_persistent_map_).begin(), i = 0 ; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i ) {
+            T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
+            SliceT accum_slice(accum_slice_ptr, slice_shape);
+            T* accum_val_slice_ptr = &accum_val_flat(i, 0);
+            SliceT accum_val_slice(accum_val_slice_ptr, slice_shape);
+
+            accum_slice.device(ctx->template eigen_device<Device>()) = accum_val_slice;
+        }
     }
   }
 
@@ -534,24 +551,15 @@ class SparseConditionalAccumulator
 
   inline bool ReturnValTensor(OpKernelContext* ctx) {
     //ctx->set_output(1, *accum_val_);
-
     Tensor* accum_val_tensor = nullptr;
-
     const int64 nnz = accum_idx_val_val_persistent_map_->size();
-
     Tensor* accum_map_val_first_ = (*accum_idx_val_val_persistent_map_).begin()->second.first;
     TensorShape accum_val_shape = accum_map_val_first_->shape();
-
     accum_val_shape.set_dim(0, nnz);
-
     OP_REQUIRES_OK_BOOLEAN(ctx, ctx->allocate_output(1, accum_val_shape, &accum_val_tensor));
-
     auto accum_val_flat = accum_val_tensor->flat_outer_dims<T>();
-
     const int64 num_col = (accum_map_val_first_->flat_outer_dims<T>()).dimension(1);
-
     Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
-
     {
         std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
         int i;
@@ -564,7 +572,6 @@ class SparseConditionalAccumulator
             accum_val_slice = accum_slice;
         }
     }
-
     return true;
   }
 
