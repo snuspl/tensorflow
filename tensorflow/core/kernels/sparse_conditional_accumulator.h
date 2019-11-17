@@ -55,27 +55,24 @@ class SparseConditionalAccumulator
       : TypedConditionalAccumulatorBase<
             std::tuple<const Tensor*, const Tensor*, const Tensor*>>(
             dtype, shape, name) {
-    count_element_ = nullptr;
-
     accum_idx_val_val_persistent_map_ = new std::map<int64, std::pair<Tensor*, PersistentTensor*>>();
+    count_element_map_ = new std::map<int64, int>();
   }
 
   ~SparseConditionalAccumulator() override {
-    if (count_element_ != nullptr) delete count_element_;
-
     if (accum_idx_val_val_persistent_map_ != nullptr) {
-        for ( std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it= (*accum_idx_val_val_persistent_map_).begin(); it!=(*accum_idx_val_val_persistent_map_).end(); ++it ) {
+        for (std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it= (*accum_idx_val_val_persistent_map_).begin(); it!=(*accum_idx_val_val_persistent_map_).end(); ++it) {
             if ( it->second.second != nullptr) delete it->second.second;
         }
-        (*accum_idx_val_val_persistent_map_).clear();
+        //(*accum_idx_val_val_persistent_map_).clear();
         delete accum_idx_val_val_persistent_map_;
     }
+    if (count_element_map_ != nullptr) delete count_element_map_;
   };
 
  protected:
-  std::vector<int>* count_element_ = nullptr;
-
   std::map<int64, std::pair<Tensor*, PersistentTensor*>>* accum_idx_val_val_persistent_map_ = nullptr;
+  std::map<int64, int>* count_element_map_ = nullptr;
 
   typedef Eigen::TensorMap<Eigen::Tensor<T, 1, Eigen::RowMajor>,
                            Eigen::Unaligned>
@@ -170,10 +167,10 @@ class SparseConditionalAccumulator
 
     // Assign indices and values to accum_idx_val_val_persistent_map_
     if (accum_idx_val_val_persistent_map_ != nullptr) {
-        for ( std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it= (*accum_idx_val_val_persistent_map_).begin(); it!=(*accum_idx_val_val_persistent_map_).end(); ++it ) {
+        for (std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it= (*accum_idx_val_val_persistent_map_).begin(); it!=(*accum_idx_val_val_persistent_map_).end(); ++it) {
             if ( it->second.second != nullptr) delete it->second.second;
         }
-        (*accum_idx_val_val_persistent_map_).clear();
+        //(*accum_idx_val_val_persistent_map_).clear();
         delete accum_idx_val_val_persistent_map_;
     }
     accum_idx_val_val_persistent_map_ = new std::map<int64, std::pair<Tensor*, PersistentTensor*>>();
@@ -186,7 +183,14 @@ class SparseConditionalAccumulator
     const int num_col = grad_flat.dimension(1);
     Eigen::array<long, 2> extent = {1, num_col};
  
-    for(int i = 0; i < nnz; i++) {
+    // Assign count_element_map_
+    if (count_element_map_ != nullptr) {
+        delete count_element_map_;
+    }
+
+    count_element_map_ = new std::map<int64, int>();
+    
+    for (int i = 0; i < nnz; i++) {
         Tensor* temp_accum_val_ = nullptr;
         PersistentTensor* temp_accum_val_persistent_ = new PersistentTensor();
         // TODO(b/32704451): Don't just ignore the ::tensorflow::Status object!
@@ -199,13 +203,8 @@ class SparseConditionalAccumulator
             grad_flat.slice(offset, extent).reshape(Eigen::array<long, 2>({1, num_col}));
 
         (*accum_idx_val_val_persistent_map_)[grad_idx->vec<int64>()(i)] = std::make_pair(temp_accum_val_, temp_accum_val_persistent_); 
+        (*count_element_map_)[grad_idx->vec<int64>()(i)] = 1; 
     }
-
-    // Assign count_element_
-    if (count_element_ != nullptr) {
-      delete count_element_;
-    }
-    count_element_ = new std::vector<int>(nnz, 1);
 
     // Do not need shape; Assume that the op has checked that the shapes match,
     // so grad's shape == shape_
@@ -222,10 +221,6 @@ class SparseConditionalAccumulator
     const int64 grad_nnz = grad_idx->dim_size(0);
 
     const int64 accum_map_nnz = accum_idx_val_val_persistent_map_->size();
-
-    std::vector<int>* sum_counts = new std::vector<int>();
-    // cannot know before
-    sum_counts->reserve(accum_map_nnz);
 
     auto grad_flat = grad_val->flat_outer_dims<T>();
     const int64 num_col = grad_flat.dimension(1);
@@ -244,7 +239,6 @@ class SparseConditionalAccumulator
           switch (map_cmp(it->first, grad_idx, j)) {
             case -1:
               // Element comes from accumulator -> need not to be updated;
-              sum_counts->push_back(count_element_->at(i));
               ++i;
               ++it;
               break;
@@ -257,7 +251,7 @@ class SparseConditionalAccumulator
                   T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
                   SliceT accum_slice(accum_slice_ptr, slice_shape);
                   accum_slice = grad_slice + accum_slice;
-                  sum_counts->push_back(count_element_->at(i) + 1);
+                  (*count_element_map_)[it->first] += 1;
                   ++i;
                   ++it;
                   ++j;
@@ -278,7 +272,7 @@ class SparseConditionalAccumulator
                       grad_flat.slice(offset, extent).reshape(Eigen::array<long, 2>({1, num_col}));
       
                   (*accum_idx_val_val_persistent_map_).insert(it, std::make_pair(grad_idx->vec<int64>()(j), std::make_pair(temp_accum_val_, temp_accum_val_persistent_))); 
-                  sum_counts->push_back(1);
+                  (*count_element_map_)[it->first] = 1;
                   ++j;
               }
               break;
@@ -300,23 +294,16 @@ class SparseConditionalAccumulator
 
           (*accum_idx_val_val_persistent_map_).insert(it, std::make_pair(grad_idx->vec<int64>()(j), std::make_pair(temp_accum_val_, temp_accum_val_persistent_))); 
 
-          sum_counts->push_back(1);
+          (*count_element_map_)[it->first] = 1;
           ++j;
         }
     }
-
-    // (3) Keep output, i.e., switch pointers to point to new data structures
-    // representing the sum
-    // Counts
-    if (count_element_ != nullptr) delete count_element_;
-    count_element_ = sum_counts;
 
     // No need to copy shape, since shape remains the same after sum.
   }
 
   void DivideAccumGradByCounter(OpKernelContext* ctx, int average_option) override
       EXCLUSIVE_LOCKS_REQUIRED(this->mu_) {
-    //const int64 nnz = count_element_->size();
     const int64 nnz = accum_idx_val_val_persistent_map_->size();
 
     Tensor* accum_val_tensor_ = nullptr;
@@ -335,13 +322,23 @@ class SparseConditionalAccumulator
         Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
         std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
         int i;
-        for (it = (*accum_idx_val_val_persistent_map_).begin(), i = 0; it!=(*accum_idx_val_val_persistent_map_).end(); ++it, ++i ) {
+        for (it = (*accum_idx_val_val_persistent_map_).begin(), i = 0; it!=(*accum_idx_val_val_persistent_map_).end(); ++it, ++i) {
             T* accum_val_slice_ptr = &accum_val_flat(i, 0);
             SliceT accum_val_slice(accum_val_slice_ptr, slice_shape);
 
             T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
             SliceT accum_slice(accum_slice_ptr, slice_shape);
             accum_val_slice.device(ctx->template eigen_device<Device>()) = accum_slice;
+        }
+    }
+
+    std::vector<int>* count_element_ = new std::vector<int>();    
+    count_element_->reserve(nnz);
+
+    {
+        std::map<int64, int>::iterator it;
+        for (it = (*count_element_map_).begin(); it!=(*count_element_map_).end(); ++it) {
+            count_element_->push_back(it->second);
         }
     }
 
@@ -379,7 +376,7 @@ class SparseConditionalAccumulator
         Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
         std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
         int i;
-        for ( it = (*accum_idx_val_val_persistent_map_).begin(), i = 0; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i ) {
+        for (it = (*accum_idx_val_val_persistent_map_).begin(), i = 0; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i) {
             T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
             SliceT accum_slice(accum_slice_ptr, slice_shape);
             T* accum_val_slice_ptr = &accum_val_flat(i, 0);
@@ -388,6 +385,8 @@ class SparseConditionalAccumulator
             accum_slice.device(ctx->template eigen_device<Device>()) = accum_val_slice;
         }
     }
+
+    if (count_element_ != nullptr) delete count_element_;
   }
 
   bool SetOutput(OpKernelContext* ctx) override {
@@ -474,7 +473,7 @@ class SparseConditionalAccumulator
     {
         std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
         int i;
-        for ( it = (*accum_idx_val_val_persistent_map_).begin(), i = 0 ; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i ) {
+        for (it = (*accum_idx_val_val_persistent_map_).begin(), i = 0 ; it!=(*accum_idx_val_val_persistent_map_).end() ; ++it, ++i) {
             idx_tensor_vec(i) = it->first;
         }
     }
@@ -494,7 +493,7 @@ class SparseConditionalAccumulator
     {
         std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it;
         int i;
-        for ( it = (*accum_idx_val_val_persistent_map_).begin(), i = 0; it!=(*accum_idx_val_val_persistent_map_).end(); ++it, ++i ) {
+        for (it = (*accum_idx_val_val_persistent_map_).begin(), i = 0; it!=(*accum_idx_val_val_persistent_map_).end(); ++it, ++i) {
             T* accum_val_slice_ptr = &accum_val_flat(i, 0);
             SliceT accum_val_slice(accum_val_slice_ptr, slice_shape);
 
