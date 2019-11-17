@@ -64,7 +64,6 @@ class SparseConditionalAccumulator
         for (std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it= (*accum_idx_val_val_persistent_map_).begin(); it!=(*accum_idx_val_val_persistent_map_).end(); ++it) {
             if ( it->second.second != nullptr) delete it->second.second;
         }
-        //(*accum_idx_val_val_persistent_map_).clear();
         delete accum_idx_val_val_persistent_map_;
     }
     if (count_element_map_ != nullptr) delete count_element_map_;
@@ -170,7 +169,6 @@ class SparseConditionalAccumulator
         for (std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it= (*accum_idx_val_val_persistent_map_).begin(); it!=(*accum_idx_val_val_persistent_map_).end(); ++it) {
             if ( it->second.second != nullptr) delete it->second.second;
         }
-        //(*accum_idx_val_val_persistent_map_).clear();
         delete accum_idx_val_val_persistent_map_;
     }
     accum_idx_val_val_persistent_map_ = new std::map<int64, std::pair<Tensor*, PersistentTensor*>>();
@@ -220,13 +218,11 @@ class SparseConditionalAccumulator
 
     const int64 grad_nnz = grad_idx->dim_size(0);
 
-    const int64 accum_map_nnz = accum_idx_val_val_persistent_map_->size();
-
     auto grad_flat = grad_val->flat_outer_dims<T>();
     const int64 num_col = grad_flat.dimension(1);
     Eigen::DSizes<Eigen::DenseIndex, 1> slice_shape(num_col);
 
-    int64 i = 0, j = 0;
+    int64 j = 0;
     {
         std::map<int64, std::pair<Tensor*, PersistentTensor*>>::iterator it = (*accum_idx_val_val_persistent_map_).begin();
         
@@ -235,67 +231,36 @@ class SparseConditionalAccumulator
 
         Eigen::array<long, 2> extent = {1, num_col};
 
-        while (i < accum_map_nnz && j < grad_nnz) {
-          switch (map_cmp(it->first, grad_idx, j)) {
-            case -1:
-              // Element comes from accumulator -> need not to be updated;
-              ++i;
-              ++it;
-              break;
-            case 0:
-              // Element is a sum of accumulated value and new gradient;
-              // compute sum here
-              {
-                  const T* grad_slice_ptr = &grad_flat(j, 0);
-                  SliceConstT grad_slice(grad_slice_ptr, slice_shape);
-                  T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
-                  SliceT accum_slice(accum_slice_ptr, slice_shape);
-                  accum_slice = grad_slice + accum_slice;
-                  (*count_element_map_)[it->first] += 1;
-                  ++i;
-                  ++it;
-                  ++j;
-              }
-              break;
-
-            case 1: // from grad
-              // Element comes from new gradient; make a copy of indices and values
-              {
-                  Tensor* temp_accum_val_ = nullptr;
-                  PersistentTensor* temp_accum_val_persistent_ = new PersistentTensor();
-                  ctx->allocate_persistent(dtype_, tensor_shape, temp_accum_val_persistent_,
-                                       &temp_accum_val_)
-                      .IgnoreError();
-      
-                  Eigen::array<long, 2> offset = {j, 0};
-                  temp_accum_val_->flat<T>().device(ctx->template eigen_device<Device>()) =
-                      grad_flat.slice(offset, extent).reshape(Eigen::array<long, 2>({1, num_col}));
-      
-                  (*accum_idx_val_val_persistent_map_).insert(it, std::make_pair(grad_idx->vec<int64>()(j), std::make_pair(temp_accum_val_, temp_accum_val_persistent_))); 
-                  (*count_element_map_)[it->first] = 1;
-                  ++j;
-              }
-              break;
-          }
-        }
-
-        // Handle leftovers
         while (j < grad_nnz) {
-          //from grad
-          Tensor* temp_accum_val_ = nullptr;
-          PersistentTensor* temp_accum_val_persistent_ = new PersistentTensor();
-          ctx->allocate_persistent(dtype_, tensor_shape, temp_accum_val_persistent_,
-                               &temp_accum_val_)
-              .IgnoreError();
+            int64 b = grad_idx->vec<int64>()(j); 
+            it = accum_idx_val_val_persistent_map_->lower_bound(b);
 
-          Eigen::array<long, 2> offset = {j, 0};
-          temp_accum_val_->flat<T>().device(ctx->template eigen_device<Device>()) =
-              grad_flat.slice(offset, extent).reshape(Eigen::array<long, 2>({1, num_col}));
-
-          (*accum_idx_val_val_persistent_map_).insert(it, std::make_pair(grad_idx->vec<int64>()(j), std::make_pair(temp_accum_val_, temp_accum_val_persistent_))); 
-
-          (*count_element_map_)[it->first] = 1;
-          ++j;
+            // Element is a sum of accumulated value and new gradient;
+            // compute sum here
+            if (it != accum_idx_val_val_persistent_map_->end() && it->first == b) {
+                const T* grad_slice_ptr = &grad_flat(j, 0);
+                SliceConstT grad_slice(grad_slice_ptr, slice_shape);
+                T* accum_slice_ptr = &(it->second.first->flat_outer_dims<T>())(0, 0);
+                SliceT accum_slice(accum_slice_ptr, slice_shape);
+                accum_slice = grad_slice + accum_slice;
+                (*count_element_map_)[it->first] += 1;
+            }
+            else {
+            // Element comes from new gradient; make a copy of indices and values
+                Tensor* temp_accum_val_ = nullptr;
+                PersistentTensor* temp_accum_val_persistent_ = new PersistentTensor();
+                ctx->allocate_persistent(dtype_, tensor_shape, temp_accum_val_persistent_,
+                                     &temp_accum_val_)
+                    .IgnoreError();
+    
+                Eigen::array<long, 2> offset = {j, 0};
+                temp_accum_val_->flat<T>().device(ctx->template eigen_device<Device>()) =
+                    grad_flat.slice(offset, extent).reshape(Eigen::array<long, 2>({1, num_col}));
+    
+                (*accum_idx_val_val_persistent_map_).insert(it, std::make_pair(grad_idx->vec<int64>()(j), std::make_pair(temp_accum_val_, temp_accum_val_persistent_))); 
+                (*count_element_map_)[it->first] = 1;
+            }
+            j++; 
         }
     }
 
