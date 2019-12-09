@@ -416,18 +416,6 @@ class SparseConditionalAccumulator
   }
 
  private:
-  inline int map_cmp(int64 a_arg, const Tensor* b_idx,
-                 const int64 b_row) {
-    const int64 a = a_arg;
-    const int64 b = b_idx->vec<int64>()(b_row);
-    if (a < b) {
-      return -1;
-    } else if (a > b) {
-      return 1;
-    }
-    return 0;
-  }
-
   inline bool ReturnIdxTensor(OpKernelContext* ctx) {
     Tensor* idx_tensor;
     const int64 nnz = accum_idx_val_val_persistent_map_->size();
