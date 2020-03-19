@@ -141,6 +141,7 @@ class FlatMapDatasetOp::Dataset : public DatasetBase {
 
           // We have reached the end of the current element, so maybe move on
           // to the next element.
+          ctx->index_manager()->RecordInfertile(current_element_index_);
           current_element_iterator_.reset();
           current_element_index_ = nullptr;
         }

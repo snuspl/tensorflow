@@ -141,8 +141,12 @@ class ZipDatasetOp::Dataset : public DatasetBase {
       out_tensors->reserve(dataset()->output_dtypes().size());
       for (const auto& input_impl : input_impls_) {
         std::vector<Tensor> input_tensors;
-        TF_RETURN_IF_ERROR(this->GetNextFromInput(
-            input_impl, ctx, &input_tensors, end_of_sequence, parent_indices));
+        EparallaxTensorIndex* index;
+        do {
+          TF_RETURN_IF_ERROR(input_impl->GetNext(
+              ctx, &input_tensors, end_of_sequence, index));
+        } while (!*end_of_sequence && input_tensors.empty());
+        parent_indices->push_back(index);
         if (*end_of_sequence) {
           break;
         }

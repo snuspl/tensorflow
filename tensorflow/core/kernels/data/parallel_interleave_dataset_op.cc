@@ -254,10 +254,12 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
         bool* end_of_sequence,
         std::vector<EparallaxTensorIndex*>* parent_indices) override {
       std::shared_ptr<Result> result;
+      EparallaxTensorIndex* index;
+      bool infertile;
       {
         mutex_lock l(*mu_);
         EnsureThreadsStarted(ctx);
-        while (!Consume(&result)) {
+        while (!Consume(&result, &index, &infertile)) {
           RecordStop(ctx);
           cond_var_->wait(l);
           RecordStart(ctx);
@@ -269,7 +271,10 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
       }
       if (result->status.ok()) {
         *out_tensors = std::move(result->return_values);
-        parent_indices->push_back(result->index);
+        parent_indices->push_back(index);
+        if (infertile) {
+          ctx->index_manager()->RecordInfertile(index);
+        }
         RecordBufferDequeue(ctx, *out_tensors);
       }
       *end_of_sequence = false;
@@ -331,7 +336,6 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
     struct Result {
       Status status;
       std::vector<Tensor> return_values;
-      EparallaxTensorIndex* index = nullptr;
       // Indicates whether the result is ready to be consumed.
       bool is_ready = false;
     };
@@ -348,6 +352,7 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
       std::vector<Tensor> inputs;
 
       EparallaxTensorIndex* index = nullptr;
+      bool infertile = false;
       // Iterator created from the input element.
       std::unique_ptr<IteratorBase> iterator;
       mutex mu;
@@ -375,15 +380,17 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
     // Consumes a result (if available), returning an indication of whether
     // a result is available. If `true` is returned, `result` either
     // points to a valid result or is null if end of input has been reached.
-    bool Consume(std::shared_ptr<Result>* result)
+    bool Consume(std::shared_ptr<Result>* result,
+                 EparallaxTensorIndex** index,
+                 bool* infertile)
         EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
       if (!sloppy_) {
-        return ConsumeHelper(result);
+        return ConsumeHelper(result, index, infertile);
       }
       // If we are allowed to be sloppy (i.e. return results out of order),
       // try to find an element in the cycle that has a result available.
       for (int i = 0; i < dataset()->cycle_length_; ++i) {
-        if (ConsumeHelper(result)) {
+        if (ConsumeHelper(result, index, infertile)) {
           return true;
         }
         AdvanceToNextInCycle();
@@ -391,7 +398,9 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
       return false;
     }
 
-    bool ConsumeHelper(std::shared_ptr<Result>* result)
+    bool ConsumeHelper(std::shared_ptr<Result>* result,
+                       EparallaxTensorIndex** index,
+                       bool* infertile)
         EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
       while (true) {
         std::shared_ptr<Element> element = current_elements_[cycle_index_];
@@ -401,6 +410,8 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
             if (element->results.front()->is_ready) {
               // We found a result.
               std::swap(*result, element->results.front());
+              *index = element->index;
+              *infertile = element->infertile;
               element->results.pop_front();
               AdvancePosition();
               cond_var_->notify_all();
@@ -571,8 +582,9 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
       for (int64 i = 0; i < num_results; ++i) {
         auto result = std::make_shared<Result>();
         result->status = element->iterator->GetNext(
-            ctx.get(), &result->return_values, &end_of_input, result->index);
+            ctx.get(), &result->return_values, &end_of_input);
         if (end_of_input) {
+          element->infertile = true;
           break;
         }
         RecordBufferEnqueue(ctx.get(), result->return_values);

@@ -282,6 +282,9 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
             Status s = current_worker->outputs.front().status;
             current_worker->outputs.front().output.swap(*out_tensors);
             parent_indices->push_back(current_worker->index);
+            if (current_worker->infertile) {
+              ctx->index_manager()->RecordInfertile(current_worker->index);
+            }
             current_worker->outputs.pop_front();
             current_worker->cond_var.notify_one();
             return s;
@@ -507,6 +510,8 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
       std::vector<Tensor> input;
 
       EparallaxTensorIndex* index;
+
+      bool infertile = false;
       // The buffered output elements.
       std::deque<OutputElem> outputs;
       // Set to true iff the worker thread expects to append more elements to
@@ -741,13 +746,11 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
                   worker_thread_states_[thread_index]
                       .output_elem.output.empty() &&
                   !worker_thread_states_[thread_index].end_of_sequence) {
-                EparallaxTensorIndex* unused_index;
                 worker_thread_states_[thread_index].output_elem.status =
                     worker_thread_states_[thread_index].iterator->GetNext(
                         ctx.get(),
                         &worker_thread_states_[thread_index].output_elem.output,
-                        &worker_thread_states_[thread_index].end_of_sequence,
-                        unused_index);
+                        &worker_thread_states_[thread_index].end_of_sequence);
                 end_of_sequence =
                     worker_thread_states_[thread_index].end_of_sequence;
               } else {
@@ -784,6 +787,7 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
                 worker_thread_states_[thread_index].iterator.reset();
                 worker_thread_states_[thread_index].input.clear();
                 worker_thread_states_[thread_index].end_of_sequence = false;
+                workers_[thread_index].infertile = true;
               } else {
                 workers_[thread_index].outputs.emplace_back(
                     worker_thread_states_[thread_index].output_elem.status);

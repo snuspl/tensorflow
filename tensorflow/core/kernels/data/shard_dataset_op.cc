@@ -140,7 +140,7 @@ class ShardDatasetOp::Dataset : public DatasetBase {
         std::vector<Tensor> unused_result;
 
         Status s = this->GetNextFromInput(
-            input_impl_, ctx, &unused_result, end_of_sequence, parent_indices);
+            input_impl_, ctx, &unused_result, end_of_sequence);
         if (*end_of_sequence || errors::IsOutOfRange(s)) {
           return errors::InvalidArgument(
               "There aren't enough elements in this dataset for each shard "

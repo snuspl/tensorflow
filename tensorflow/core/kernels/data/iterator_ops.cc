@@ -92,7 +92,7 @@ Status IteratorResource::GetNext(OpKernelContext* ctx,
     } while (s.ok() && !*end_of_sequence && out_tensors->empty());
 
     if (s.ok() && !*end_of_sequence && !out_tensors->empty()) {
-      index_manager_->NotifyFinished(out_index);
+      index_manager_->RecordFinished(out_index);
     }
     return s;
   }

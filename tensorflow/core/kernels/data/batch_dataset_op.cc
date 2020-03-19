@@ -148,9 +148,12 @@ class BatchDatasetOp::Dataset : public DatasetBase {
         *end_of_sequence = false;
         for (int i = 0; i < dataset()->batch_size_ && !*end_of_sequence; ++i) {
           std::vector<Tensor> batch_element_tuple;
-          TF_RETURN_IF_ERROR(this->GetNextFromInput(
-              input_impl_, ctx, &batch_element_tuple, end_of_sequence,
-              parent_indices));
+          EparallaxTensorIndex* index;
+          do {
+            TF_RETURN_IF_ERROR(input_impl_->GetNext(
+                ctx, &batch_element_tuple, end_of_sequence, index));
+          } while (!*end_of_sequence && batch_element_tuple.empty());
+          parent_indices->push_back(index);
           if (!*end_of_sequence) {
             batch_elements.emplace_back(std::move(batch_element_tuple));
           } else {
