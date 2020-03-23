@@ -135,9 +135,14 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
   class FiniteIterator : public DatasetIterator<Dataset> {
    public:
     explicit FiniteIterator(const Params& params)
-        : DatasetIterator<Dataset>(params), i_(0) {}
+        : DatasetIterator<Dataset>(params) {}
 
     Status Initialize(IteratorContext* ctx) override {
+      LOG(INFO) << ctx->index_manager();
+      bool ok = ctx->index_manager()->RestoreState(prefix(), "i_", &i_);
+      if (!ok) {
+        i_ = 0;
+      }
       return dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_);
     }
 
@@ -157,8 +162,8 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
         if (!*end_of_sequence) {
           return Status::OK();
         }
-        ++i_;
-        ctx->index_manager()->ResetParentIndex(prefix());
+        ctx->index_manager()->SaveState(prefix(), "i_", ++i_);
+        ctx->index_manager()->ResetIndex(prefix());
         TF_RETURN_IF_ERROR(
             dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_));
       }
@@ -240,7 +245,7 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
         if (!*end_of_sequence) {
           return s;
         } else {
-          ctx->index_manager()->ResetParentIndex(prefix());
+          ctx->index_manager()->ResetIndex(prefix());
           input_impl_.reset();
           first_call_ = true;
         }

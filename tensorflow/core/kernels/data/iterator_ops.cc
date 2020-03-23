@@ -68,6 +68,10 @@ Status IteratorResource::GetNext(OpKernelContext* ctx,
     tf_shared_lock l(mu_);
     captured_state = iterator_state_;
   }
+  uint64 start;
+  if (first_) {
+    start = ctx->env()->NowMicros();
+  }
   if (captured_state->iterator) {
     Status s;
     EparallaxTensorIndex* out_index;
@@ -92,10 +96,17 @@ Status IteratorResource::GetNext(OpKernelContext* ctx,
     } while (s.ok() && !*end_of_sequence && out_tensors->empty());
 
     if (s.ok() && !*end_of_sequence && !out_tensors->empty()) {
+      if (first_) {
+        LOG(INFO) << "First run took " << ctx->env()->NowMicros() - start << " usecs";
+      } else {
+        LOG(INFO) << "Run took " << ctx->env()->NowMicros() - start << " usecs";
+      }
       index_manager_->RecordFinished(out_index);
     }
+    first_ = false;
     return s;
   }
+  first_ = false;
   return errors::FailedPrecondition(
       "GetNext() failed because the iterator has not been initialized. Ensure "
       "that you have run the initializer operation for this iterator before "

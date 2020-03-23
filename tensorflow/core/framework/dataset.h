@@ -70,6 +70,13 @@ class EparallaxTensorIndex {
     local_index_ = local_index;
   }
 
+  ~EparallaxTensorIndex() {
+    for (auto parent_index : *parent_indices_) {
+      delete parent_index;
+    }
+    delete parent_indices_;
+  }
+
   string ToString() const {
     return iterator_id() + "(" + tensorflow::ToString(*parent_indices()) +
         ", " + std::to_string(local_index()) + ")";
@@ -392,14 +399,14 @@ class MultiLevelIndexTree {
     return false;
   }
 
-  void ClearParent(string iterator_id) {
+  void Clear(string iterator_id) {
     string key;
     IndexTree* tree;
     for (auto& it : tree_) {
       key = it.first;
       tree = it.second;
       if (key.substr(0, iterator_id.length()) == iterator_id) {
-        if (key.length() > iterator_id.length()) {
+        if (key.length() >= iterator_id.length()) {
           tree->clear();
         }
       }
@@ -449,6 +456,8 @@ class MultiLevelIndexTree {
 
   bool Empty() { return empty_; }
 
+  std::map<string, IndexTree*> tree() { return tree_; }
+
  private:
   std::map<string, IndexTree*> tree_;
   bool empty_ = true;
@@ -462,10 +471,10 @@ class IndexManager {
     issued_indices_(std::make_shared<MultiLevelIndexTree>()),
     infertile_indices_(std::make_shared<MultiLevelIndexTree>()),
     children_indices_(std::make_shared<
-        std::map<string, std::vector<EparallaxTensorIndex*>*>>()) {
-    string username(std::getenv("USER"));
-    ckpt_file_path_ = "/tmp/eparallax-" + username +
-                      "/checkpoint/index/index_ckpt";
+        std::map<string, std::vector<EparallaxTensorIndex*>*>>()),
+    state_map_(std::make_shared<std::map<string, std::map<string, int64>*>>()),
+    ckpt_dir_(std::getenv("EPARALLAX_INDEX_CKPT_DIR")),
+    shard_index_(0) {
     Restore();
   }
 
@@ -476,39 +485,61 @@ class IndexManager {
 
   void RecordFinished(EparallaxTensorIndex* index);
 
+  void RecordInfertile(EparallaxTensorIndex* index);
+
   bool AlreadyProcessed(EparallaxTensorIndex* index);
 
-  void ResetParentIndex(string iterator_id);
+  void ResetIndex(string iterator_id);
 
   void SetShardID(int64 index);
 
-  void RecordInfertile(EparallaxTensorIndex* index);
-
   bool IsFirstCall(string iterator_id);
 
+  void SaveState(string iterator_id, string key, int64 val) {
+    mutex_lock l(*mu_);
+    std::map<string, int64>* map;
+    auto it = state_map_->find(iterator_id);
+    if (it == state_map_->end()) {
+      map = new std::map<string, int64>;
+      state_map_->insert(std::make_pair(iterator_id, map));
+    } else {
+      map = it->second;
+    }
+    auto it2 = map->find(key);
+    if (it2 == map->end()) {
+      map->insert(std::make_pair(key, val));
+    } else {
+      it2->second = val;
+    }
+  }
+
+  bool RestoreState(string iterator_id, string key, int64* val) {
+    mutex_lock l(*mu_);
+    std::map<string, int64>* map;
+    auto it = state_map_->find(iterator_id);
+    if (it == state_map_->end()) {
+      return false;
+    } else {
+      map = it->second;
+    }
+    auto it2 = map->find(key);
+    if (it2 == map->end()) {
+      return false;
+    } else {
+      *val = it2->second;
+    }
+  }
+
  protected:
-  bool Sharded(EparallaxTensorIndex* index) {
-    string iterator_id = index->iterator_id();
-    if (iterator_id.find("Shard") != string::npos) {
-      return true;
-    }
-    for (auto parent_index : *index->parent_indices()) {
-      if (Sharded(parent_index)) return true;
-    }
-    return false;
-  }
-
-  bool AlreadyProcessedInternal(EparallaxTensorIndex* index)
-      EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
-    return processed_indices_->Contains(index);
-  }
-
-  bool IsOneToManyOp(string iterator_id) EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
+  bool IsOneToManyOp(string iterator_id) {
     size_t pos = iterator_id.find_last_of("::");
     string op_name = iterator_id.substr(pos+1, iterator_id.length()-pos-1);
     return op_name == "FlatMap" || op_name == "Interleave" ||
-        op_name == "ParallelInterleaveV2" || op_name == "ParallelInterleave" ||
-        op_name == "FiniteRepeat" || op_name == "ForeverRepeat";
+        op_name == "ParallelInterleaveV2" || op_name == "ParallelInterleave";
+  }
+
+  bool IsRepeatOp(string iterator_id) {
+    return iterator_id.substr(iterator_id.length()-6, 6) == "Repeat";
   }
 
   bool ChildrenAllProcessed(EparallaxTensorIndex* index)
@@ -522,22 +553,37 @@ class IndexManager {
       q = it->second;
     }
     for (auto child_index : *q) {
-      if (!AlreadyProcessedInternal(child_index)) return false;
+      if (!processed_indices_->Contains(child_index)) {
+        return false;
+      }
     }
     return true;
   }
 
   void Restore() {
-    std::ifstream ckpt_file(ckpt_file_path_.data());
+    string ckpt_file_path = ckpt_dir_ + "/index_ckpt";
+    std::ifstream ckpt_file(ckpt_file_path.data());
     if (ckpt_file.is_open()) {
-      string line, key, val;
+      string line;
       while (getline(ckpt_file, line)) {
-        size_t delimiter_pos = line.find(":");
-        key = line.substr(0, delimiter_pos);
-        val = line.substr(delimiter_pos + 1);
-        if (key == "processed_index") {
+        if (line == "\n") continue;
+        if (line.substr(0, 15) == "processed_index") {
+          size_t delimiter_pos = line.find(":");
+          string val = line.substr(delimiter_pos + 1);
           EparallaxTensorIndex* index = DeserializeIndex(val);
+          if (processed_indices_->Contains(index)) {
+            delete index;
+            continue;
+          }
           processed_indices_->Push(index);
+        } else {
+          size_t delimiter_pos = line.find_last_of(":");
+          string key = line.substr(0, delimiter_pos);
+          string val = line.substr(delimiter_pos + 1);
+          size_t pos = key.find("%");
+          string iterator_id = key.substr(0, pos);
+          string val_id = key.substr(pos+1, key.length()-pos-1);
+          SaveState(iterator_id, val_id, atoi(val.c_str()));
         }
       }
       ckpt_file.close();
@@ -546,13 +592,26 @@ class IndexManager {
 
   void Save() {
     std::ofstream ckpt_file;
-    string ckpt_file_path = ckpt_file_path_ + "_" +
+    string ckpt_file_path = ckpt_dir_ + "/index_ckpt_" +
         std::to_string(shard_index_);
     ckpt_file.open(ckpt_file_path.data());
-    if(ckpt_file.is_open()){
+    if (ckpt_file.is_open()) {
       for (auto processed_indices : processed_indices_->GetAll()) {
         for (auto processed_index : *processed_indices) {
           ckpt_file << "processed_index:" << *processed_index << "\n";
+        }
+      }
+      string iterator_id;
+      std::map<string, int64>* map;
+      string val_id;
+      int64 val;
+      for (auto& it : *state_map_) {
+        iterator_id = it.first;
+        map = it.second;
+        for (auto& it2 : *map) {
+          val_id = it2.first;
+          val = it2.second;
+          ckpt_file << iterator_id << "%" << val_id << ":" << val << "\n";
         }
       }
       ckpt_file.close();
@@ -641,8 +700,9 @@ class IndexManager {
   std::shared_ptr<MultiLevelIndexTree> infertile_indices_ GUARDED_BY(*mu_);
   std::shared_ptr<std::map<string, std::vector<EparallaxTensorIndex*>*>>
       children_indices_ GUARDED_BY(*mu_);
+  std::shared_ptr<std::map<string, std::map<string, int64>*>> state_map_;
   int64 shard_index_;
-  string ckpt_file_path_;
+  string ckpt_dir_;
 };
 
 // A utility class for running a function and ensuring that there is always a

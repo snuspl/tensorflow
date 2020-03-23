@@ -422,8 +422,9 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
     all_processed = true;
     EparallaxTensorIndex* processed_index = processed_indices_buffer.back();
     processed_indices_buffer.pop_back();
+
     processed_indices_->Push(processed_index);
-    //LOG(INFO) << "processed " << *processed_index;
+    LOG(INFO) << "processed " << *processed_index;
 
     if (!IsOneToManyOp(processed_index->iterator_id())) {
       for (auto parent_index : *processed_index->parent_indices()) {
@@ -432,12 +433,18 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
     } else {
       for (auto parent_index : *processed_index->parent_indices()) {
         if (infertile_indices_->Contains(parent_index) &&
-            ChildrenAllProcessed(parent_index)) {
+            ChildrenAllProcessed(parent_index) &&
+            !processed_indices_->Contains(parent_index)) {
           processed_indices_buffer.push_back(parent_index);
         }
       }
     }
   }
+}
+
+void IndexManager::RecordInfertile(EparallaxTensorIndex* index) {
+  mutex_lock l(*mu_);
+  infertile_indices_->Push(index);
 }
 
 EparallaxTensorIndex* IndexManager::IssueNewIndex(
@@ -446,17 +453,22 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
   EparallaxTensorIndex* out_index;
 
   int64 last_local_index = -1;
-  for (auto issued_index : *issued_indices_->Get(
-        prefix, ToString(*parent_indices))) {
-    if (*issued_index->parent_indices() == *parent_indices &&
-        issued_index->local_index() > last_local_index) {
-      last_local_index = issued_index->local_index();
+  if (!IsRepeatOp(prefix)) {
+    for (auto issued_index : *issued_indices_->Get(
+          prefix, ToString(*parent_indices))) {
+      if (*issued_index->parent_indices() == *parent_indices &&
+          issued_index->local_index() > last_local_index) {
+        last_local_index = issued_index->local_index();
+      }
     }
   }
   out_index = new EparallaxTensorIndex(prefix, parent_indices,
                                        last_local_index + 1);
 
-  issued_indices_->Push(out_index);
+  if (!IsRepeatOp(prefix) || !issued_indices_->Contains(out_index)) {
+    issued_indices_->Push(out_index);
+  }
+
   for (auto parent_index : *out_index->parent_indices()) {
     auto it = children_indices_->find(parent_index->ToString());
     std::vector<EparallaxTensorIndex*>* q;
@@ -473,18 +485,26 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
 }
 
 bool IndexManager::AlreadyProcessed(EparallaxTensorIndex* index) {
+  if (IsRepeatOp(index->iterator_id())) return false;
   mutex_lock l(*mu_);
-  return AlreadyProcessedInternal(index);
+  //return processed_indices_->Contains(index);
+  bool ret = processed_indices_->Contains(index);
+  if (ret) {
+    LOG(INFO) << "Already processed " << *index;
+  }
+  return ret;
 }
 
-void IndexManager::ResetParentIndex(string iterator_id) {
+void IndexManager::ResetIndex(string iterator_id) {
   mutex_lock l(*mu_);
-  processed_indices_->ClearParent(iterator_id);
-  issued_indices_->ClearParent(iterator_id);
-  infertile_indices_->ClearParent(iterator_id);
+  processed_indices_->Clear(iterator_id);
+  issued_indices_->Clear(iterator_id);
+  infertile_indices_->Clear(iterator_id);
 
   std::ofstream ckpt_file;
-  ckpt_file.open(ckpt_file_path_.data());
+  string ckpt_file_path = ckpt_dir_ + "/index_ckpt_" +
+      std::to_string(shard_index_);
+  ckpt_file.open(ckpt_file_path.data());
   if (ckpt_file.is_open()) {
     ckpt_file << "\n";
     ckpt_file.close();
@@ -494,11 +514,6 @@ void IndexManager::ResetParentIndex(string iterator_id) {
 void IndexManager::SetShardID(int64 index) {
   mutex_lock l(*mu_);
   shard_index_ = index;
-}
-
-void IndexManager::RecordInfertile(EparallaxTensorIndex* index) {
-  mutex_lock l(*mu_);
-  infertile_indices_->Push(index);
 }
 
 bool IndexManager::IsFirstCall(string iterator_id) {

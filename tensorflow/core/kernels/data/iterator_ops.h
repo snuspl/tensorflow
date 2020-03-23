@@ -88,6 +88,7 @@ class IteratorResource : public ResourceBase {
   const std::unique_ptr<DeviceMgr> device_mgr_ GUARDED_BY(mu_);
   std::shared_ptr<State> iterator_state_ GUARDED_BY(mu_);
   std::shared_ptr<IndexManager> index_manager_ GUARDED_BY(mu_);
+  bool first_ GUARDED_BY(mu_) = true;
   const DataTypeVector output_dtypes_;
   const std::vector<PartialTensorShape> output_shapes_;
 };

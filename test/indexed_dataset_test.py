@@ -1,44 +1,9 @@
 import tensorflow as tf
 import numpy as np
-import sys
 import pytest
-import glob
-import os
-import time
+from functools import reduce
 
-def get_ckpt_dir():
-    return "/tmp/eparallax-{}/checkpoint/index/".format(os.environ["USER"])
-
-def do_initialize_ckpt():
-    for f in glob.glob(get_ckpt_dir() + "*"):
-        os.remove(f)
-
-def initialize_ckpt(fn):
-    def wrapper(*args, **kwargs):
-        do_initialize_ckpt()
-        return fn(*args, **kwargs)
-    return wrapper
-
-def aggregate_ckpt(fn):
-    def wrapper(*args, **kwargs):
-        ret = fn(*args, **kwargs)
-        with open(get_ckpt_dir() + "index_ckpt", 'a') as global_ckpt:
-            for f in glob.glob(get_ckpt_dir() + "index_ckpt_*"):
-                with open(f, 'r') as shard_ckpt:
-                    global_ckpt.write(shard_ckpt.read())
-                os.remove(f)
-        return ret
-    return wrapper
-
-@aggregate_ckpt
-def run_steps(graph, n, num_steps, initializer=None):
-    with tf.compat.v1.Session(graph=graph) as sess:
-        if initializer is not None:
-            sess.run(initializer)
-        res = []
-        for _ in range(num_steps):
-            res.append(sess.run(n))
-        return res
+from test_util import *
 
 @initialize_ckpt
 def test_tensor_slices():
@@ -78,7 +43,7 @@ def test_flat_map():
         res = run_steps(g, n, 5)
 
 @initialize_ckpt
-def test_multi_level_flat_map():
+def test_flat_map_and_flat_map():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices([[[0,1,2],[3,4,5],[6,7,8]],
@@ -123,7 +88,7 @@ def test_interleave():
         res = run_steps(g, n, 1)
 
 @initialize_ckpt
-def test_multi_level_interleave():
+def test_interleave_and_interleave():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices([[[0,1,2],[3,4,5],[6,7,8]],
@@ -218,7 +183,7 @@ def test_batch():
         res = run_steps(g, n, 2)
 
 @initialize_ckpt
-def test_multi_level_batch():
+def test_batch_and_batch():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(100)))
@@ -307,16 +272,22 @@ def test_forever_repeat():
         n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
     for _ in range(5):
         res = run_steps(g, n, 5)
+        print(res)
         assert res == [0,1,2,3,4]
         res = run_steps(g, n, 5)
+        print(res)
         assert res == [5,6,7,8,9]
         res = run_steps(g, n, 3)
+        print(res)
         assert res == [0,1,2]
         res = run_steps(g, n, 6)
+        print(res)
         assert res == [3,4,5,6,7,8]
         res = run_steps(g, n, 4)
+        print(res)
         assert res == [9,0,1,2]
         res = run_steps(g, n, 7)
+        print(res)
         assert res == [3,4,5,6,7,8,9]
 
 @initialize_ckpt
@@ -349,7 +320,6 @@ def test_repeat_and_shuffle():
         ds = ds.repeat(3)
         ds = ds.shuffle(15)
         n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = []
     res = run_steps(g, n, 5)
     res += run_steps(g, n, 5)
     res += run_steps(g, n, 3)
@@ -390,11 +360,69 @@ def test_shard():
         n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
         n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
     res = run_steps(g, [n1, n2], 5)
+    print(res)
     assert res == [[0,1],[2,3],[4,5],[6,7],[8,9]]
     res = run_steps(g, [n1, n2], 4)
+    print(res)
     assert res == [[10,11],[12,13],[14,15],[16,17]]
     with pytest.raises(tf.errors.OutOfRangeError):
         res = run_steps(g, [n1, n2], 2)
+
+@initialize_ckpt
+def test_scale_out():
+    g = tf.Graph()
+    with g.as_default():
+        ds1 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds2 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds1 = ds1.shard(2, 0)
+        ds2 = ds2.shard(2, 1)
+        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
+        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
+    res = run_steps(g, [n1, n2], 5)
+    assert res == [[0,1],[2,3],[4,5],[6,7],[8,9]]
+    g = tf.Graph()
+    with g.as_default():
+        ds1 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds2 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds3 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds1 = ds1.shard(3, 0)
+        ds2 = ds2.shard(3, 1)
+        ds3 = ds3.shard(3, 2)
+        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
+        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
+        n3 = tf.compat.v1.data.make_one_shot_iterator(ds3).get_next()
+    res = run_steps(g, [n1, n2, n3], 3)
+    assert [sorted(r) for r in res] == [[10,11,12],[13,14,15],[16,17,18]]
+    with pytest.raises(tf.errors.OutOfRangeError):
+        res = run_steps(g, [n1, n2, n3], 1)
+
+@initialize_ckpt
+def test_scale_in():
+    g = tf.Graph()
+    with g.as_default():
+        ds1 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds2 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds3 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds1 = ds1.shard(3, 0)
+        ds2 = ds2.shard(3, 1)
+        ds3 = ds3.shard(3, 2)
+        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
+        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
+        n3 = tf.compat.v1.data.make_one_shot_iterator(ds3).get_next()
+    res = run_steps(g, [n1, n2, n3], 3)
+    assert res == [[0,1,2],[3,4,5],[6,7,8]]
+    g = tf.Graph()
+    with g.as_default():
+        ds1 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds2 = tf.data.Dataset.from_tensor_slices(list(range(20)))
+        ds1 = ds1.shard(2, 0)
+        ds2 = ds2.shard(2, 1)
+        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
+        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
+    res = run_steps(g, [n1, n2], 5)
+    assert [sorted(r) for r in res] == [[9,10],[11,12],[13,14],[15,16],[17,18]]
+    with pytest.raises(tf.errors.OutOfRangeError):
+        res = run_steps(g, [n1, n2], 1)
 
 @initialize_ckpt
 def test_cache():
@@ -411,10 +439,6 @@ def test_cache():
     assert res == [9]
     with pytest.raises(tf.errors.OutOfRangeError):
         res = run_steps(g, n, 1)
-
-@initialize_ckpt
-def test_tf_record():
-    pass
 
 @initialize_ckpt
 def test_take():
@@ -487,54 +511,6 @@ def test_interleave_and_prefetch():
         res = run_steps(g, n, 1)
 
 @initialize_ckpt
-def test_imagenet():
-    g = tf.Graph()
-    with g.as_default():
-        file_names = [
-            "/cmsdata/ssd1/cmslab/imagenet-data/aws/train-00{}-of-01024".format(i) for i in range(256, 256+4)
-        ]
-        file_names.sort()
-        batch_size = 16
-        num_splits = 1
-        batch_size_per_split = batch_size // num_splits
-        num_workers = 2
-        worker_id = 0
-        ds = tf.data.TFRecordDataset.list_files(file_names, shuffle=False)
-        ds = ds.shard(num_workers, worker_id)
-        ds = ds.apply(
-            tf.data.experimental.parallel_interleave(
-                tf.data.TFRecordDataset, cycle_length=10))
-        counter = tf.data.Dataset.range(batch_size)
-        counter = counter.repeat()
-        ds = tf.data.Dataset.zip((ds, counter))
-        ds = ds.prefetch(buffer_size=batch_size)
-        ds = ds.shuffle(buffer_size=50, seed=2020)
-        ds = ds.repeat()
-        ds = ds.apply(
-            tf.data.experimental.map_and_batch(
-                map_func=lambda *x:x,
-                batch_size=batch_size_per_split,
-                num_parallel_batches=num_splits))
-        ds = ds.prefetch(buffer_size=num_splits)
-        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
-        n = iterator.get_next()
-
-    expected_result = run_steps(g, n, 100)
-    do_initialize_ckpt()
-    res = run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    res += run_steps(g, n, 10)
-    assert all([all(o[0] == r[0]) and all(o[1] == r[1])
-            for o, r in zip(expected_result, res)])
-
-@initialize_ckpt
 def test_prefetch_and_prefetch():
     g = tf.Graph()
     with g.as_default():
@@ -564,18 +540,24 @@ def test_parallel_interleave():
                            num_parallel_calls=4)
         n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
     res = run_steps(g, n, 5)
+    print(res)
     assert res == [0,3,6,9,12]
     res = run_steps(g, n, 4)
+    print(res)
     assert res == [15,18,21,24]
     res = run_steps(g, n, 6)
+    print(res)
     assert res == [1,4,7,10,13,16]
     res = run_steps(g, n, 9)
+    print(res)
     assert res == [19,22,25,2,5,8,11,14,17]
     res = run_steps(g, n, 3)
+    print(res)
     assert res == [20,23,26]
     with pytest.raises(tf.errors.OutOfRangeError):
         res = run_steps(g, n, 1)
 
+"""
 @initialize_ckpt
 def test_experimental_map_and_batch():
     g = tf.Graph()
@@ -629,3 +611,18 @@ def test_map_and_batch():
     assert all(all(r == e) for r, e in zip(res, expected_result))
     with pytest.raises(tf.errors.OutOfRangeError):
         res = run_steps(g, n, 1)
+"""
+
+if __name__ == "__main__":
+    #import time
+    #time.sleep(10)
+    #test_tensor_slices()
+    #test_shard()
+    #test_experimental_map_and_batch()
+    #test_map_and_batch()
+    #test_prefetch_and_prefetch()
+    #test_forever_repeat()
+    #test_finite_repeat()
+    #test_experimental_parallel_interleave()
+    test_repeat_and_shuffle()
+    #test_parallel_interleave()
