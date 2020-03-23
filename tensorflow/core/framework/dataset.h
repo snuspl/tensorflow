@@ -78,8 +78,8 @@ class EparallaxTensorIndex {
   }
 
   string ToString() const {
-    return iterator_id() + "(" + tensorflow::ToString(*parent_indices()) +
-        ", " + std::to_string(local_index()) + ")";
+    return "(" + tensorflow::ToString(*parent_indices()) + ", " +
+        std::to_string(local_index()) + ")";
   }
 
   string iterator_id() const { return iterator_id_; }

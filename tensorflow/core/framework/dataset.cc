@@ -424,7 +424,6 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
     processed_indices_buffer.pop_back();
 
     processed_indices_->Push(processed_index);
-    LOG(INFO) << "processed " << *processed_index;
 
     if (!IsOneToManyOp(processed_index->iterator_id())) {
       for (auto parent_index : *processed_index->parent_indices()) {
@@ -482,11 +481,7 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
 
 bool IndexManager::AlreadyProcessed(EparallaxTensorIndex* index) {
   mutex_lock l(*mu_);
-  //return processed_indices_->Contains(index);
-  bool ret = processed_indices_->Contains(index);
-  if (ret) {
-  }
-  return ret;
+  return processed_indices_->Contains(index);
 }
 
 void IndexManager::ResetIndex(string iterator_id) {
@@ -540,25 +535,13 @@ Status DatasetBaseIterator::GetNext(IteratorContext* ctx,
   Status s = GetNextInternal(ctx, out_tensors, end_of_sequence, parent_indices);
   out_index = ctx->index_manager()->IssueNewIndex(prefix(), parent_indices);
 
-  if (!s.ok() || *end_of_sequence) {
-    if (*end_of_sequence) {
-      LOG(INFO) << ctx->index_manager()->shard_index() << " end of sequence " << *out_index;
-    }
-    if (!s.ok()) {
-      LOG(INFO) << "not ok " << *out_index;
-    }
+  if (!s.ok() || *end_of_sequence || out_tensors->empty()) {
     return s;
   }
-  if (ctx->index_manager()->AlreadyProcessed(out_index) || out_tensors->empty()) {
-    if (out_tensors->empty()) {
-      LOG(INFO) << "Parent returned empty tensors " << *out_index;
-    } else {
-      LOG(INFO) << "Already processed " << *out_index;
-    }
+  if (ctx->index_manager()->AlreadyProcessed(out_index)) {
     out_tensors->clear();
     return s;
   }
-  LOG(INFO) << *out_index;
 
   if (s.ok() && !*end_of_sequence) RecordElement(ctx);
   RecordStop(ctx, /*start_output=*/true);
