@@ -272,22 +272,16 @@ def test_forever_repeat():
         n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
     for _ in range(5):
         res = run_steps(g, n, 5)
-        print(res)
         assert res == [0,1,2,3,4]
         res = run_steps(g, n, 5)
-        print(res)
         assert res == [5,6,7,8,9]
         res = run_steps(g, n, 3)
-        print(res)
         assert res == [0,1,2]
         res = run_steps(g, n, 6)
-        print(res)
         assert res == [3,4,5,6,7,8]
         res = run_steps(g, n, 4)
-        print(res)
         assert res == [9,0,1,2]
         res = run_steps(g, n, 7)
-        print(res)
         assert res == [3,4,5,6,7,8,9]
 
 @initialize_ckpt
@@ -360,10 +354,8 @@ def test_shard():
         n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
         n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
     res = run_steps(g, [n1, n2], 5)
-    print(res)
     assert res == [[0,1],[2,3],[4,5],[6,7],[8,9]]
     res = run_steps(g, [n1, n2], 4)
-    print(res)
     assert res == [[10,11],[12,13],[14,15],[16,17]]
     with pytest.raises(tf.errors.OutOfRangeError):
         res = run_steps(g, [n1, n2], 2)
@@ -540,24 +532,18 @@ def test_parallel_interleave():
                            num_parallel_calls=4)
         n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
     res = run_steps(g, n, 5)
-    print(res)
     assert res == [0,3,6,9,12]
     res = run_steps(g, n, 4)
-    print(res)
     assert res == [15,18,21,24]
     res = run_steps(g, n, 6)
-    print(res)
     assert res == [1,4,7,10,13,16]
     res = run_steps(g, n, 9)
-    print(res)
     assert res == [19,22,25,2,5,8,11,14,17]
     res = run_steps(g, n, 3)
-    print(res)
     assert res == [20,23,26]
     with pytest.raises(tf.errors.OutOfRangeError):
         res = run_steps(g, n, 1)
 
-"""
 @initialize_ckpt
 def test_experimental_map_and_batch():
     g = tf.Graph()
@@ -611,18 +597,3 @@ def test_map_and_batch():
     assert all(all(r == e) for r, e in zip(res, expected_result))
     with pytest.raises(tf.errors.OutOfRangeError):
         res = run_steps(g, n, 1)
-"""
-
-if __name__ == "__main__":
-    #import time
-    #time.sleep(10)
-    #test_tensor_slices()
-    #test_shard()
-    #test_experimental_map_and_batch()
-    #test_map_and_batch()
-    #test_prefetch_and_prefetch()
-    #test_forever_repeat()
-    #test_finite_repeat()
-    #test_experimental_parallel_interleave()
-    test_repeat_and_shuffle()
-    #test_parallel_interleave()
