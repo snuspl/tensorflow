@@ -124,16 +124,18 @@ class ShardDatasetOp::Dataset : public DatasetBase {
       }
 
       std::vector<Tensor> result;
-      result.clear();
-      TF_RETURN_IF_ERROR(this->GetNextFromInput(
-            input_impl_, ctx, &result, end_of_sequence, parent_indices));
+      EparallaxTensorIndex* index;
+      do {
+        result.clear();
+        TF_RETURN_IF_ERROR(
+            input_impl_->GetNext(ctx, &result, end_of_sequence, index));
+      } while (!*end_of_sequence &&
+          (next_index_++ % dataset()->num_shards_) != dataset()->index_);
       if (*end_of_sequence) {
         input_impl_.reset();
         return Status::OK();
       }
-      if ((next_index_++ % dataset()->num_shards_) != dataset()->index_) {
-        result.clear();
-      }
+      parent_indices->push_back(index);
 
       while (dataset()->require_non_empty_ &&
              next_index_ < dataset()->num_shards_) {
