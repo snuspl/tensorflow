@@ -406,7 +406,7 @@ class MultiLevelIndexTree {
       key = it.first;
       tree = it.second;
       if (key.substr(0, iterator_id.length()) == iterator_id) {
-        if (key.length() >= iterator_id.length()) {
+        if (key.length() > iterator_id.length()) {
           tree->clear();
         }
       }
@@ -527,15 +527,19 @@ class IndexManager {
       return false;
     } else {
       *val = it2->second;
+      return true;
     }
   }
+
+  int64 shard_index() { return shard_index_; }
 
  protected:
   bool IsOneToManyOp(string iterator_id) {
     size_t pos = iterator_id.find_last_of("::");
     string op_name = iterator_id.substr(pos+1, iterator_id.length()-pos-1);
     return op_name == "FlatMap" || op_name == "Interleave" ||
-        op_name == "ParallelInterleaveV2" || op_name == "ParallelInterleave";
+        op_name == "ParallelInterleaveV2" || op_name == "ParallelInterleave" ||
+        op_name == "FiniteRepeat" || op_name == "ForeverRepeat";
   }
 
   bool IsRepeatOp(string iterator_id) {
@@ -565,6 +569,7 @@ class IndexManager {
     std::ifstream ckpt_file(ckpt_file_path.data());
     if (ckpt_file.is_open()) {
       string line;
+      std::vector<EparallaxTensorIndex*> buf;
       while (getline(ckpt_file, line)) {
         if (line == "\n") continue;
         if (line.substr(0, 15) == "processed_index") {
@@ -576,6 +581,10 @@ class IndexManager {
             continue;
           }
           processed_indices_->Push(index);
+          if (index->iterator_id().substr(index->iterator_id().length()-13, 13)
+              == "ForeverRepeat") {
+            buf.push_back(index);
+          }
         } else {
           size_t delimiter_pos = line.find_last_of(":");
           string key = line.substr(0, delimiter_pos);
@@ -584,6 +593,17 @@ class IndexManager {
           string iterator_id = key.substr(0, pos);
           string val_id = key.substr(pos+1, key.length()-pos-1);
           SaveState(iterator_id, val_id, atoi(val.c_str()));
+        }
+      }
+      int64 max_local_index = 0;
+      for (auto index : buf) {
+        if (index->local_index() > max_local_index) {
+          max_local_index = index->local_index();
+        }
+      }
+      for (auto index : buf) {
+        if (index->local_index() < max_local_index) {
+          issued_indices_->Push(index);
         }
       }
       ckpt_file.close();

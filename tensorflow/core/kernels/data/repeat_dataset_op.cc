@@ -135,14 +135,10 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
   class FiniteIterator : public DatasetIterator<Dataset> {
    public:
     explicit FiniteIterator(const Params& params)
-        : DatasetIterator<Dataset>(params) {}
+        : DatasetIterator<Dataset>(params), i_(0) {}
 
     Status Initialize(IteratorContext* ctx) override {
       LOG(INFO) << ctx->index_manager();
-      bool ok = ctx->index_manager()->RestoreState(prefix(), "i_", &i_);
-      if (!ok) {
-        i_ = 0;
-      }
       return dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_);
     }
 
@@ -155,15 +151,19 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
         *end_of_sequence = true;
         return Status::OK();
       }
+      EparallaxTensorIndex* index;
       while (i_ < dataset()->count_) {
-        TF_RETURN_IF_ERROR(this->GetNextFromInput(
-              input_impl_, ctx, out_tensors, end_of_sequence, parent_indices));
+        TF_RETURN_IF_ERROR(
+            input_impl_->GetNext(ctx, out_tensors, end_of_sequence, index));
 
         if (!*end_of_sequence) {
+          parent_indices->push_back(index);
+          if (i_ == dataset()->count_ - 1) {
+            ctx->index_manager()->RecordInfertile(index);
+          }
           return Status::OK();
         }
-        ctx->index_manager()->SaveState(prefix(), "i_", ++i_);
-        ctx->index_manager()->ResetIndex(prefix());
+        ++i_;
         TF_RETURN_IF_ERROR(
             dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_));
       }
