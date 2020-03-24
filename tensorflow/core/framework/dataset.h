@@ -379,6 +379,8 @@ class StatsAggregator;
 class FunctionHandleCache;
 
 typedef std::map<string, std::vector<EparallaxTensorIndex*>*> IndexTree;
+// Class for storing indices.
+// Stores indices as a map of (iterator_id -> (parent_indices -> index))
 class MultiLevelIndexTree {
  public:
   void Push(EparallaxTensorIndex* index) {
@@ -463,10 +465,14 @@ class MultiLevelIndexTree {
   bool empty_ = true;
 };
 
+// Class for managing indexing.
 class IndexManager {
  public:
   IndexManager() :
     mu_(std::make_shared<mutex>()),
+    mu1_(std::make_shared<mutex>()),
+    mu2_(std::make_shared<mutex>()),
+    mu3_(std::make_shared<mutex>()),
     processed_indices_(std::make_shared<MultiLevelIndexTree>()),
     issued_indices_(std::make_shared<MultiLevelIndexTree>()),
     infertile_indices_(std::make_shared<MultiLevelIndexTree>()),
@@ -495,59 +501,21 @@ class IndexManager {
 
   bool IsFirstCall(string iterator_id);
 
-  void SaveState(string iterator_id, string key, int64 val) {
-    mutex_lock l(*mu_);
-    std::map<string, int64>* map;
-    auto it = state_map_->find(iterator_id);
-    if (it == state_map_->end()) {
-      map = new std::map<string, int64>;
-      state_map_->insert(std::make_pair(iterator_id, map));
-    } else {
-      map = it->second;
-    }
-    auto it2 = map->find(key);
-    if (it2 == map->end()) {
-      map->insert(std::make_pair(key, val));
-    } else {
-      it2->second = val;
-    }
-  }
-
-  bool RestoreState(string iterator_id, string key, int64* val) {
-    mutex_lock l(*mu_);
-    std::map<string, int64>* map;
-    auto it = state_map_->find(iterator_id);
-    if (it == state_map_->end()) {
-      return false;
-    } else {
-      map = it->second;
-    }
-    auto it2 = map->find(key);
-    if (it2 == map->end()) {
-      return false;
-    } else {
-      *val = it2->second;
-      return true;
-    }
-  }
-
-  int64 shard_index() { return shard_index_; }
-
- protected:
   bool IsOneToManyOp(string iterator_id) {
+    //uint64 start = Env::Default()->NowMicros();
     size_t pos = iterator_id.find_last_of("::");
     string op_name = iterator_id.substr(pos+1, iterator_id.length()-pos-1);
-    return op_name == "FlatMap" || op_name == "Interleave" ||
+    bool ret = op_name == "FlatMap" || op_name == "Interleave" ||
         op_name == "ParallelInterleaveV2" || op_name == "ParallelInterleave" ||
         op_name == "FiniteRepeat" || op_name == "ForeverRepeat";
+    //LOG(INFO) << "IsOneToManyOp took " << Env::Default()->NowMicros() - start << " usecs.";
+    return ret;
   }
 
-  bool IsRepeatOp(string iterator_id) {
-    return iterator_id.substr(iterator_id.length()-6, 6) == "Repeat";
-  }
-
+ protected:
   bool ChildrenAllProcessed(EparallaxTensorIndex* index)
-      EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
+      EXCLUSIVE_LOCKS_REQUIRED(*mu3_) {
+    //uint64 start = Env::Default()->NowMicros();
     auto it = children_indices_->find(index->ToString());
     std::vector<EparallaxTensorIndex*>* q;
     if (it == children_indices_->end()) {
@@ -556,11 +524,15 @@ class IndexManager {
     } else {
       q = it->second;
     }
-    for (auto child_index : *q) {
-      if (!processed_indices_->Contains(child_index)) {
+    for (auto it = q->begin(); it < q->end();) {
+      if (processed_indices_->Contains(*it)) {
+        q->erase(it);
+      } else {
+        //LOG(INFO) << "ChildrenAllProcessed took " << Env::Default()->NowMicros() - start << " usecs.";
         return false;
       }
     }
+    //LOG(INFO) << "ChildrenAllProcessed took " << Env::Default()->NowMicros() - start << " usecs.";
     return true;
   }
 
@@ -585,14 +557,6 @@ class IndexManager {
               == "ForeverRepeat") {
             buf.push_back(index);
           }
-        } else {
-          size_t delimiter_pos = line.find_last_of(":");
-          string key = line.substr(0, delimiter_pos);
-          string val = line.substr(delimiter_pos + 1);
-          size_t pos = key.find("%");
-          string iterator_id = key.substr(0, pos);
-          string val_id = key.substr(pos+1, key.length()-pos-1);
-          SaveState(iterator_id, val_id, atoi(val.c_str()));
         }
       }
       int64 max_local_index = 0;
@@ -716,10 +680,13 @@ class IndexManager {
  private:
   std::shared_ptr<mutex> mu_;
   std::shared_ptr<MultiLevelIndexTree> processed_indices_ GUARDED_BY(*mu_);
-  std::shared_ptr<MultiLevelIndexTree> issued_indices_ GUARDED_BY(*mu_);
-  std::shared_ptr<MultiLevelIndexTree> infertile_indices_ GUARDED_BY(*mu_);
+  std::shared_ptr<mutex> mu1_;
+  std::shared_ptr<MultiLevelIndexTree> issued_indices_ GUARDED_BY(*mu1_);
+  std::shared_ptr<mutex> mu2_;
+  std::shared_ptr<MultiLevelIndexTree> infertile_indices_ GUARDED_BY(*mu2_);
+  std::shared_ptr<mutex> mu3_;
   std::shared_ptr<std::map<string, std::vector<EparallaxTensorIndex*>*>>
-      children_indices_ GUARDED_BY(*mu_);
+      children_indices_ GUARDED_BY(*mu3_);
   std::shared_ptr<std::map<string, std::map<string, int64>*>> state_map_;
   int64 shard_index_;
   string ckpt_dir_;

@@ -98,8 +98,6 @@ Status IteratorResource::GetNext(OpKernelContext* ctx,
     if (s.ok() && !*end_of_sequence && !out_tensors->empty()) {
       if (first_) {
         LOG(INFO) << "First run took " << ctx->env()->NowMicros() - start << " usecs";
-      } else {
-        LOG(INFO) << "Run took " << ctx->env()->NowMicros() - start << " usecs";
       }
       index_manager_->RecordFinished(out_index);
     }

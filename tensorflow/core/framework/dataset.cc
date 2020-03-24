@@ -413,7 +413,7 @@ Status DatasetBase::DatasetGraphDefBuilder::AddInputDataset(
 }
 
 void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
-  mutex_lock l(*mu_);
+  //uint64 start = Env::Default()->NowMicros();
   bool all_processed;
   std::vector<EparallaxTensorIndex*> processed_indices_buffer;
   processed_indices_buffer.push_back(index);
@@ -423,47 +423,58 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
     EparallaxTensorIndex* processed_index = processed_indices_buffer.back();
     processed_indices_buffer.pop_back();
 
-    processed_indices_->Push(processed_index);
+    {
+      mutex_lock l(*mu_);
+      processed_indices_->Push(processed_index);
 
-    if (!IsOneToManyOp(processed_index->iterator_id())) {
-      for (auto parent_index : *processed_index->parent_indices()) {
-        processed_indices_buffer.push_back(parent_index);
-      }
-    } else {
-      for (auto parent_index : *processed_index->parent_indices()) {
-        if (infertile_indices_->Contains(parent_index) &&
-            ChildrenAllProcessed(parent_index) &&
-            !processed_indices_->Contains(parent_index)) {
+      if (!IsOneToManyOp(processed_index->iterator_id())) {
+        for (auto parent_index : *processed_index->parent_indices()) {
           processed_indices_buffer.push_back(parent_index);
+        }
+      } else {
+        mutex_lock l(*mu2_);
+        mutex_lock l(*mu3_);
+        for (auto parent_index : *processed_index->parent_indices()) {
+          if (infertile_indices_->Contains(parent_index) &&
+              ChildrenAllProcessed(parent_index) &&
+              !processed_indices_->Contains(parent_index)) {
+            processed_indices_buffer.push_back(parent_index);
+          }
         }
       }
     }
   }
+  //LOG(INFO) << "RecordFinished took " << Env::Default()->NowMicros() - start << " usecs.";
 }
 
 void IndexManager::RecordInfertile(EparallaxTensorIndex* index) {
-  mutex_lock l(*mu_);
+  mutex_lock l(*mu2_);
   infertile_indices_->Push(index);
 }
 
 EparallaxTensorIndex* IndexManager::IssueNewIndex(
     string prefix, std::vector<EparallaxTensorIndex*>* parent_indices) {
-  mutex_lock l(*mu_);
+  //uint64 start = Env::Default()->NowMicros();
   EparallaxTensorIndex* out_index;
+  {
+    mutex_lock l(*mu1_);
 
-  int64 last_local_index = -1;
-  for (auto issued_index : *issued_indices_->Get(
-        prefix, ToString(*parent_indices))) {
-    if (*issued_index->parent_indices() == *parent_indices &&
-        issued_index->local_index() > last_local_index) {
-      last_local_index = issued_index->local_index();
+    int64 last_local_index = -1;
+    for (auto issued_index : *issued_indices_->Get(
+          prefix, ToString(*parent_indices))) {
+      if (*issued_index->parent_indices() == *parent_indices &&
+          issued_index->local_index() > last_local_index) {
+        last_local_index = issued_index->local_index();
+      }
     }
+    out_index = new EparallaxTensorIndex(prefix, parent_indices,
+                                         last_local_index + 1);
+
+    issued_indices_->Push(out_index);
   }
-  out_index = new EparallaxTensorIndex(prefix, parent_indices,
-                                       last_local_index + 1);
-
-  issued_indices_->Push(out_index);
-
+  //LOG(INFO) << prefix << " IssueNewIndex1 took " << Env::Default()->NowMicros() - start << " usecs.";
+  //start = Env::Default()->NowMicros();
+  mutex_lock l(*mu3_);
   for (auto parent_index : *out_index->parent_indices()) {
     auto it = children_indices_->find(parent_index->ToString());
     std::vector<EparallaxTensorIndex*>* q;
@@ -476,6 +487,7 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
     q->push_back(out_index);
   }
 
+  //LOG(INFO) << prefix << " IssueNewIndex2 took " << Env::Default()->NowMicros() - start << " usecs.";
   return out_index;
 }
 
@@ -485,10 +497,18 @@ bool IndexManager::AlreadyProcessed(EparallaxTensorIndex* index) {
 }
 
 void IndexManager::ResetIndex(string iterator_id) {
-  mutex_lock l(*mu_);
-  processed_indices_->Clear(iterator_id);
-  issued_indices_->Clear(iterator_id);
-  infertile_indices_->Clear(iterator_id);
+  {
+    mutex_lock l(*mu_);
+    processed_indices_->Clear(iterator_id);
+  }
+  {
+    mutex_lock l(*mu1_);
+    issued_indices_->Clear(iterator_id);
+  }
+  {
+    mutex_lock l(*mu2_);
+    infertile_indices_->Clear(iterator_id);
+  }
 
   std::ofstream ckpt_file;
   string ckpt_file_path = ckpt_dir_ + "/index_ckpt_" +
@@ -501,12 +521,12 @@ void IndexManager::ResetIndex(string iterator_id) {
 }
 
 void IndexManager::SetShardID(int64 index) {
-  mutex_lock l(*mu_);
   shard_index_ = index;
 }
 
 bool IndexManager::IsFirstCall(string iterator_id) {
   mutex_lock l(*mu_);
+  mutex_lock l2(*mu1_);
   return issued_indices_->Empty(iterator_id) && processed_indices_->Empty();
 }
 
@@ -535,6 +555,7 @@ Status DatasetBaseIterator::GetNext(IteratorContext* ctx,
   Status s = GetNextInternal(ctx, out_tensors, end_of_sequence, parent_indices);
   out_index = ctx->index_manager()->IssueNewIndex(prefix(), parent_indices);
 
+  // `out_tensors` is empty if the parent indices have been already processed.
   if (!s.ok() || *end_of_sequence || out_tensors->empty()) {
     return s;
   }
