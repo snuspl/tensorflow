@@ -2,6 +2,7 @@ import tensorflow as tf
 import os
 import glob
 import time
+from functools import reduce
 
 def get_ckpt_dir():
     return os.environ["EPARALLAX_INDEX_CKPT_DIR"]
@@ -27,6 +28,10 @@ def aggregate_ckpt(fn):
         return ret
     return wrapper
 
+def flatten(res):
+    return reduce(lambda x,y:x+y,
+            [r[0].tolist() for r in reduce(lambda x,y:x+y, res)])
+
 @aggregate_ckpt
 def run_steps(graph, n, num_steps, initializer=None, measure_time=True):
     start = None
@@ -38,8 +43,6 @@ def run_steps(graph, n, num_steps, initializer=None, measure_time=True):
         res = []
         for i in range(num_steps):
             res.append(sess.run(n))
-            #print(i)
-            #print(res[-1])
         if measure_time:
             print(time.time() - start)
         return res
@@ -85,7 +88,7 @@ def set_eq(list_1, list_2):
     for i, elem_1 in enumerate(list_1):
         found = False
         for j, elem_2 in enumerate(list_2):
-            if elem_1[0] == elem_2[0]:
+            if elem_1 == elem_2:
                 print("list_1[{}] == list_2[{}]".format(i, j))
                 found = True
                 break
@@ -96,7 +99,7 @@ def set_eq(list_1, list_2):
     for i, elem_2 in enumerate(list_2):
         found = False
         for j, elem_1 in enumerate(list_1):
-            if elem_1[0] == elem_2[0]:
+            if elem_1 == elem_2:
                 print("list_2[{}] == list_1[{}]".format(i, j))
                 found = True
                 break
