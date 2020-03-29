@@ -78,11 +78,33 @@ class EparallaxTensorIndex {
   }
 
   string ToString() const {
-    return "(" + tensorflow::ToString(*parent_indices()) + ", " +
+    return op_type() + "(" + tensorflow::ToString(*parent_indices()) + ", " +
         std::to_string(local_index()) + ")";
   }
 
   string iterator_id() const { return iterator_id_; }
+  string op_type() const {
+    size_t pos = iterator_id_.find_last_of("::");
+    if (iterator_id_.substr(pos-2, 1) != "]") {
+      return iterator_id_.substr(pos+1, iterator_id_.length()-pos-1);
+    }
+    pos = pos - 2;
+    int level = 1;
+    while (level != 0) {
+      --pos;
+      if (iterator_id_.substr(pos, 1) == "]") {
+        ++level;
+      }
+      else if (iterator_id_.substr(pos, 1) == "[") {
+        --level;
+        if (level == 0) {
+          break;
+        }
+      }
+    }
+    pos = iterator_id_.substr(0, pos).find_last_of("::");
+    return iterator_id_.substr(pos+1, iterator_id_.length()-pos-1);
+  }
   std::vector<EparallaxTensorIndex*>* parent_indices() const {
     return parent_indices_;
   }
@@ -154,7 +176,7 @@ inline std::ostream& operator<<(std::ostream& os,
                                 const std::vector<EparallaxTensorIndex*>& t) {
   os << "<";
   for (auto it=t.begin(); it!=t.end(); it++) {
-    os << **it << ", ";
+    os << (*it)->ToString() << ", ";
   }
   os << ">";
   return os;
@@ -390,6 +412,18 @@ class MultiLevelIndexTree {
     empty_ = false;
   }
 
+  void Remove(EparallaxTensorIndex* index) {
+    std::vector<EparallaxTensorIndex*>* indices = Get(
+        index->iterator_id(), ToString(*index->parent_indices()));
+    for (auto it=indices->begin(); it<indices->end();) {
+      if (*index == **it) {
+        indices->erase(it);
+      } else {
+        it++;
+      }
+    }
+  }
+
   bool Contains(EparallaxTensorIndex *index) {
     std::vector<EparallaxTensorIndex*>* indices = Get(
         index->iterator_id(), ToString(*index->parent_indices()));
@@ -469,22 +503,21 @@ class MultiLevelIndexTree {
 class IndexManager {
  public:
   IndexManager() :
-    mu_(std::make_shared<mutex>()),
-    mu1_(std::make_shared<mutex>()),
-    mu2_(std::make_shared<mutex>()),
-    mu3_(std::make_shared<mutex>()),
-    processed_indices_(std::make_shared<MultiLevelIndexTree>()),
-    issued_indices_(std::make_shared<MultiLevelIndexTree>()),
-    infertile_indices_(std::make_shared<MultiLevelIndexTree>()),
-    children_indices_(std::make_shared<
-        std::map<string, std::vector<EparallaxTensorIndex*>*>>()),
-    state_map_(std::make_shared<std::map<string, std::map<string, int64>*>>()),
-    ckpt_dir_(std::getenv("EPARALLAX_INDEX_CKPT_DIR")),
-    shard_index_(0) {
+      processed_mu_(std::make_shared<mutex>()),
+      issued_mu_(std::make_shared<mutex>()),
+      infertile_mu_(std::make_shared<mutex>()),
+      children_mu_(std::make_shared<mutex>()),
+      processed_indices_(std::make_shared<MultiLevelIndexTree>()),
+      issued_indices_(std::make_shared<MultiLevelIndexTree>()),
+      infertile_indices_(std::make_shared<MultiLevelIndexTree>()),
+      children_indices_(std::make_shared<
+          std::map<string, std::vector<EparallaxTensorIndex*>*>>()),
+      ckpt_dir_(std::getenv("EPARALLAX_INDEX_CKPT_DIR")),
+      shard_index_(0) {
     Restore();
   }
 
-  ~IndexManager() { Save(); }
+  ~IndexManager() { SaveInternal(); }
 
   EparallaxTensorIndex* IssueNewIndex(
       string prefix, std::vector<EparallaxTensorIndex*>* parent_indices);
@@ -512,9 +545,25 @@ class IndexManager {
     return ret;
   }
 
+  void Save() {
+    SaveInternal();
+  }
+
  protected:
+  void RemoveChildren(EparallaxTensorIndex* index) {
+    mutex_lock l(*children_mu_);
+    auto it = children_indices_->find(index->ToString());
+    if (it == children_indices_->end()) {
+      return;
+    }
+    std::vector<EparallaxTensorIndex*>* children_indices = it->second;
+    for (EparallaxTensorIndex* index : *children_indices) {
+      processed_indices_->Remove(index);
+    }
+  }
+
   bool ChildrenAllProcessed(EparallaxTensorIndex* index)
-      EXCLUSIVE_LOCKS_REQUIRED(*mu3_) {
+      EXCLUSIVE_LOCKS_REQUIRED(*children_mu_) {
     //uint64 start = Env::Default()->NowMicros();
     auto it = children_indices_->find(index->ToString());
     std::vector<EparallaxTensorIndex*>* q;
@@ -547,7 +596,7 @@ class IndexManager {
         if (line.substr(0, 15) == "processed_index") {
           size_t delimiter_pos = line.find(":");
           string val = line.substr(delimiter_pos + 1);
-          EparallaxTensorIndex* index = DeserializeIndex(val);
+          EparallaxTensorIndex* index = DeserializeIndex(val, "");
           if (processed_indices_->Contains(index)) {
             delete index;
             continue;
@@ -574,7 +623,7 @@ class IndexManager {
     }
   }
 
-  void Save() {
+  void SaveInternal() {
     std::ofstream ckpt_file;
     string ckpt_file_path = ckpt_dir_ + "/index_ckpt_" +
         std::to_string(shard_index_);
@@ -585,24 +634,12 @@ class IndexManager {
           ckpt_file << "processed_index:" << *processed_index << "\n";
         }
       }
-      string iterator_id;
-      std::map<string, int64>* map;
-      string val_id;
-      int64 val;
-      for (auto& it : *state_map_) {
-        iterator_id = it.first;
-        map = it.second;
-        for (auto& it2 : *map) {
-          val_id = it2.first;
-          val = it2.second;
-          ckpt_file << iterator_id << "%" << val_id << ":" << val << "\n";
-        }
-      }
       ckpt_file.close();
     }
   }
 
-  std::vector<EparallaxTensorIndex*>* DeserializeIndices(string line) {
+  std::vector<EparallaxTensorIndex*>* DeserializeIndices(string line,
+                                                         string base) {
     line = line.substr(1, line.length()-1);
     size_t pos = 0;
     int level = 0;
@@ -622,7 +659,7 @@ class IndexManager {
       } else if (line[pos] == ']') {
         level2--;
       } else if (found && level == 0 && level2 == 0) {
-        v->push_back(DeserializeIndex(line.substr(0, pos)));
+        v->push_back(DeserializeIndex(line.substr(0, pos), base));
         if (line.length() - pos < 4) {
           break;
         } else {
@@ -636,14 +673,7 @@ class IndexManager {
     return v;
   }
 
-  EparallaxTensorIndex* DeserializeIndex(string line) {
-    string val = line;
-    if (line.substr(0, 15) == "processed_index") {
-      val = line.substr(16);
-    } else if (line.substr(0, 12) == "issued_index") {
-      val = line.substr(13);
-    }
-
+  EparallaxTensorIndex* DeserializeIndex(string line, string base) {
     size_t pos = 0;
     int level = 0;
     while (true) {
@@ -657,12 +687,19 @@ class IndexManager {
       pos++;
     }
 
-    size_t comma_pos = val.find_last_of(",");
-    string iterator_id = val.substr(0, pos);
-    string parent_indices = val.substr(pos+1,
+    size_t comma_pos = line.find_last_of(",");
+    string iterator_id = line.substr(0, pos);
+    if (base != "") {
+      if (iterator_id.find("[") == string::npos) {
+        iterator_id = base + "::" + iterator_id;
+      } else {
+        iterator_id = base.substr(0, base.find_last_of("::")+1) + iterator_id;
+      }
+    }
+    string parent_indices = line.substr(pos+1,
                                        comma_pos-pos-1);
-    string local_index = val.substr(comma_pos+2,
-                                    val.length()-comma_pos-3);
+    string local_index = line.substr(comma_pos+2,
+                                     line.length()-comma_pos-3);
     EparallaxTensorIndex* index;
     // TODO: Connect parent and children
     if (parent_indices == "<>") {
@@ -671,23 +708,25 @@ class IndexManager {
                                        atoi(local_index.c_str()));
     } else {
       index = new EparallaxTensorIndex(iterator_id,
-                                       DeserializeIndices(parent_indices),
+                                       DeserializeIndices(parent_indices,
+                                                          iterator_id),
                                        atoi(local_index.c_str()));
     }
     return index;
   }
 
  private:
-  std::shared_ptr<mutex> mu_;
-  std::shared_ptr<MultiLevelIndexTree> processed_indices_ GUARDED_BY(*mu_);
-  std::shared_ptr<mutex> mu1_;
-  std::shared_ptr<MultiLevelIndexTree> issued_indices_ GUARDED_BY(*mu1_);
-  std::shared_ptr<mutex> mu2_;
-  std::shared_ptr<MultiLevelIndexTree> infertile_indices_ GUARDED_BY(*mu2_);
-  std::shared_ptr<mutex> mu3_;
+  std::shared_ptr<mutex> processed_mu_;
+  std::shared_ptr<MultiLevelIndexTree> processed_indices_
+      GUARDED_BY(*processed_mu_);
+  std::shared_ptr<mutex> issued_mu_;
+  std::shared_ptr<MultiLevelIndexTree> issued_indices_ GUARDED_BY(*issued_mu_);
+  std::shared_ptr<mutex> infertile_mu_;
+  std::shared_ptr<MultiLevelIndexTree> infertile_indices_
+      GUARDED_BY(*infertile_mu_);
+  std::shared_ptr<mutex> children_mu_;
   std::shared_ptr<std::map<string, std::vector<EparallaxTensorIndex*>*>>
-      children_indices_ GUARDED_BY(*mu3_);
-  std::shared_ptr<std::map<string, std::map<string, int64>*>> state_map_;
+      children_indices_ GUARDED_BY(*children_mu_);
   int64 shard_index_;
   string ckpt_dir_;
 };
