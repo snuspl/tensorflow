@@ -910,6 +910,15 @@ class OneShotIteratorOp : public AsyncOpKernel {
 
 }  // namespace
 
+void IteratorStopOp::Compute(OpKernelContext* ctx) {
+  IteratorResource* iterator;
+  OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &iterator));
+  iterator->SaveIndex();
+  Tensor* output_tensor = nullptr;
+  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &output_tensor));
+  output_tensor->scalar<bool>()() = true;
+}
+
 void IteratorGetNextOp::ComputeAsync(OpKernelContext* ctx, DoneCallback done) {
   IteratorResource* iterator;
   OP_REQUIRES_OK_ASYNC(
@@ -919,6 +928,11 @@ void IteratorGetNextOp::ComputeAsync(OpKernelContext* ctx, DoneCallback done) {
   // owned thread pool.
   background_worker_.Schedule(std::bind(
       [ctx, iterator](DoneCallback done) {
+        if (iterator->ShouldStop()) {
+          while(true) {
+            std::this_thread::sleep_for(std::chrono::seconds(60));
+          }
+        }
         std::vector<Tensor> components;
         bool end_of_sequence = false;
 
@@ -1161,6 +1175,8 @@ REGISTER_KERNEL_BUILDER(Name("ReduceDataset").Device(DEVICE_CPU),
                         ReduceDatasetOp);
 REGISTER_KERNEL_BUILDER(Name("OneShotIterator").Device(DEVICE_CPU),
                         OneShotIteratorOp);
+REGISTER_KERNEL_BUILDER(Name("IteratorStop").Device(DEVICE_CPU),
+                        IteratorStopOp);
 REGISTER_KERNEL_BUILDER(Name("IteratorGetNext").Device(DEVICE_CPU).Priority(2),
                         IteratorGetNextOp);
 REGISTER_KERNEL_BUILDER(Name("IteratorGetNext").Device(DEVICE_GPU).Priority(1),

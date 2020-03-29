@@ -63,6 +63,18 @@ class IteratorResource : public ResourceBase {
     return output_shapes_;
   }
 
+  bool ShouldStop() {
+    mutex_lock l(should_stop_mu_);
+    return should_stop_;
+  }
+
+  void SaveIndex() {
+    mutex_lock l(should_stop_mu_);
+    mutex_lock l2(mu_);
+    index_manager_->Save();
+    should_stop_ = true;
+  }
+
  private:
   struct State {
     State(std::shared_ptr<FunctionLibraryDefinition> flib_def,
@@ -89,6 +101,8 @@ class IteratorResource : public ResourceBase {
   std::shared_ptr<State> iterator_state_ GUARDED_BY(mu_);
   std::shared_ptr<IndexManager> index_manager_ GUARDED_BY(mu_);
   bool first_ GUARDED_BY(mu_) = true;
+  mutex should_stop_mu_;
+  bool should_stop_ GUARDED_BY(should_stop_mu_) = false;
   const DataTypeVector output_dtypes_;
   const std::vector<PartialTensorShape> output_shapes_;
 };
@@ -172,6 +186,13 @@ class MakeIteratorOp : public AsyncOpKernel {
 
  private:
   BackgroundWorker background_worker_;
+};
+
+class IteratorStopOp : public OpKernel {
+ public:
+  explicit IteratorStopOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+
+  void Compute(OpKernelContext* ctx) override;
 };
 
 class IteratorGetNextOp : public AsyncOpKernel {
