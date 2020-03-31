@@ -98,13 +98,15 @@ class SleepDatasetOp : public UnaryDatasetOpKernel {
         return dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_);
       }
 
-      Status GetNextInternal(IteratorContext* ctx,
-                             std::vector<Tensor>* out_tensors,
-                             bool* end_of_sequence) override {
+      Status GetNextInternal(
+          IteratorContext* ctx, std::vector<Tensor>* out_tensors,
+          bool* end_of_sequence,
+          std::vector<EparallaxTensorIndex*>* parent_indices) override {
         RecordStop(ctx);
         ctx->env()->SleepForMicroseconds(dataset()->sleep_microseconds_);
         RecordStart(ctx);
-        return input_impl_->GetNext(ctx, out_tensors, end_of_sequence);
+        return this->GetNextFromInput(
+            input_impl_, ctx, out_tensors, end_of_sequence, parent_indices);
       }
 
      protected:

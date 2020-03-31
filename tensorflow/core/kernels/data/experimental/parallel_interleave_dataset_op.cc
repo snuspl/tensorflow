@@ -242,9 +242,10 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
     // It is implemented so that it matches the deterministic interleave
     // unless getting the next element would block and we are allowed to be
     // sloppy.
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    Status GetNextInternal(
+        IteratorContext* ctx, std::vector<Tensor>* out_tensors,
+        bool* end_of_sequence,
+        std::vector<EparallaxTensorIndex*>* parent_indices) override {
       mutex_lock l(mu_);
       TF_RETURN_IF_ERROR(EnsureWorkerThreadsStarted(ctx));
       while (!cancelled_) {
@@ -280,6 +281,10 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
             *end_of_sequence = false;
             Status s = current_worker->outputs.front().status;
             current_worker->outputs.front().output.swap(*out_tensors);
+            parent_indices->push_back(current_worker->index);
+            if (current_worker->infertile) {
+              ctx->index_manager()->RecordInfertile(current_worker->index);
+            }
             current_worker->outputs.pop_front();
             current_worker->cond_var.notify_one();
             return s;
@@ -299,11 +304,15 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
               // Start prefetching a new iterator.
               std::vector<Tensor> args;
               bool end_of_input = false;
-              Status s = input_impl_->GetNext(ctx, &args, &end_of_input);
+              Status s;
+              EparallaxTensorIndex* index;
+              do {
+                s = input_impl_->GetNext(ctx, &args, &end_of_input, index);
+              } while (args.empty() && s.ok() && !end_of_input);
               if (end_of_input) {
                 input_impl_.reset();
               } else {
-                current_worker->SetInputs(s, std::move(args));
+                current_worker->SetInputs(s, std::move(args), index);
                 staging_indices_.emplace_back(current_worker_index);
               }
             }
@@ -499,6 +508,10 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
     struct WorkerState {
       // The arguments to be used to construct an output iterator.
       std::vector<Tensor> input;
+
+      EparallaxTensorIndex* index;
+
+      bool infertile = false;
       // The buffered output elements.
       std::deque<OutputElem> outputs;
       // Set to true iff the worker thread expects to append more elements to
@@ -519,11 +532,13 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
       }
 
       // Sets inputs for a worker thread and notifies it to start processing.
-      void SetInputs(const Status& s, std::vector<Tensor> input_arguments) {
+      void SetInputs(const Status& s, std::vector<Tensor> input_arguments,
+                     EparallaxTensorIndex* idx) {
         if (s.ok()) {
           DCHECK(!MayHaveElements())
               << "Tried to start inputs, despite already producing!";
           input = std::move(input_arguments);
+          index = idx;
           is_producing = true;
           cond_var.notify_one();
         } else {
@@ -564,12 +579,16 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
         for (int64 i = 0; i < dataset()->num_threads(); ++i) {
           std::vector<Tensor> args;
           bool end_of_input = false;
-          Status s = input_impl_->GetNext(ctx, &args, &end_of_input);
+          EparallaxTensorIndex* index;
+          Status s;
+          do {
+            s = input_impl_->GetNext(ctx, &args, &end_of_input, index);
+          } while (s.ok() && !end_of_input && args.empty());
           if (end_of_input) {
             input_impl_.reset();
             return Status::OK();
           }
-          workers_[i].SetInputs(s, std::move(args));
+          workers_[i].SetInputs(s, std::move(args), index);
           std::shared_ptr<IteratorContext> new_ctx(new IteratorContext(*ctx));
           worker_threads_.push_back(ctx->StartThread(
               strings::StrCat(kTFDataParallelInterleaveWorker, "_", i),
@@ -675,7 +694,8 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
             worker_thread_states_[thread_index].iterator_creation_status =
                 MakeIteratorFromInputElement(
                     ctx.get(), worker_thread_states_[thread_index].input,
-                    thread_index, *instantiated_captured_func_, prefix(),
+                    workers_[thread_index].index->ToString(),
+                    *instantiated_captured_func_, prefix(),
                     &worker_thread_states_[thread_index].iterator);
             iterator_creation_status =
                 worker_thread_states_[thread_index].iterator_creation_status;
@@ -767,6 +787,7 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
                 worker_thread_states_[thread_index].iterator.reset();
                 worker_thread_states_[thread_index].input.clear();
                 worker_thread_states_[thread_index].end_of_sequence = false;
+                workers_[thread_index].infertile = true;
               } else {
                 workers_[thread_index].outputs.emplace_back(
                     worker_thread_states_[thread_index].output_elem.status);

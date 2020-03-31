@@ -231,9 +231,10 @@ class MapAndBatchDatasetOp : public UnaryDatasetOpKernel {
             ctx, &instantiated_captured_func_);
       }
 
-      Status GetNextInternal(IteratorContext* ctx,
-                             std::vector<Tensor>* out_tensors,
-                             bool* end_of_sequence) override {
+      Status GetNextInternal(
+          IteratorContext* ctx, std::vector<Tensor>* out_tensors,
+          bool* end_of_sequence,
+          std::vector<EparallaxTensorIndex*>* parent_indices) override {
         std::shared_ptr<BatchResult> result;
         {
           mutex_lock l(*mu_);
@@ -250,7 +251,8 @@ class MapAndBatchDatasetOp : public UnaryDatasetOpKernel {
           batch_results_.pop_front();
           cond_var_->notify_all();
         }
-        return ProcessResult(ctx, result, out_tensors, end_of_sequence);
+        return ProcessResult(
+            ctx, result, out_tensors, end_of_sequence, parent_indices);
       }
 
      protected:
@@ -331,6 +333,7 @@ class MapAndBatchDatasetOp : public UnaryDatasetOpKernel {
         bool output_allocated GUARDED_BY(mu);
         Status status GUARDED_BY(mu);
         int64 status_offset GUARDED_BY(mu);
+        std::vector<EparallaxTensorIndex*> indices GUARDED_BY(mu_);
         // Counts the number of outstanding calls for this batch.
         int64 num_calls;  // access guarded by owner's mutex
       };
@@ -356,15 +359,21 @@ class MapAndBatchDatasetOp : public UnaryDatasetOpKernel {
                         const std::shared_ptr<BatchResult>& result,
                         int64 offset) LOCKS_EXCLUDED(*mu_) {
         // Get the next input element.
+        Status status;
         std::vector<Tensor> input_element;
+        EparallaxTensorIndex* index;
         bool end_of_input;
-        Status status =
-            input_impl_->GetNext(ctx.get(), &input_element, &end_of_input);
+        do {
+          status = input_impl_->GetNext(
+              ctx.get(), &input_element, &end_of_input, index);
+        } while (status == Status::OK() && !end_of_input &&
+            input_element.empty());
         bool return_early;
         {
           mutex_lock l(result->mu);
           result->end_of_input = result->end_of_input || end_of_input;
           result->status.Update(status);
+          result->indices.push_back(index);
           return_early = result->end_of_input || !result->status.ok();
         }
         if (return_early) {
@@ -493,7 +502,8 @@ class MapAndBatchDatasetOp : public UnaryDatasetOpKernel {
       Status ProcessResult(IteratorContext* ctx,
                            const std::shared_ptr<BatchResult>& result,
                            std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) {
+                           bool* end_of_sequence,
+                           std::vector<EparallaxTensorIndex*>* parent_indices) {
         mutex_lock l(result->mu);
         if (result->num_elements == 0) {
           if (result->status.ok() || errors::IsOutOfRange(result->status)) {
@@ -514,6 +524,7 @@ class MapAndBatchDatasetOp : public UnaryDatasetOpKernel {
           if (dataset()->drop_remainder_) {
             // Deallocate tensors allocated for the output.
             result->output.clear();
+            result->indices.clear();
             *end_of_sequence = true;
             return Status::OK();
           }
@@ -528,10 +539,15 @@ class MapAndBatchDatasetOp : public UnaryDatasetOpKernel {
             TF_RETURN_IF_ERROR(CopyPartialBatch(&out_tensors->back(), output[i],
                                                 result->num_elements));
           }
+          for (size_t i = 0; i < result->num_elements; ++i) {
+            parent_indices->push_back(result->indices[i]);
+          }
           // Deallocate tensors allocated for the output.
           result->output.clear();
+          result->indices.clear();
         } else {
           *out_tensors = std::move(result->output);
+          *parent_indices = std::move(result->indices);
         }
         *end_of_sequence = false;
         return Status::OK();

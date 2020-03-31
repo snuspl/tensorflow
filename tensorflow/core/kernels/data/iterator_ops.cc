@@ -68,22 +68,43 @@ Status IteratorResource::GetNext(OpKernelContext* ctx,
     tf_shared_lock l(mu_);
     captured_state = iterator_state_;
   }
-  if (captured_state->iterator) {
-    IteratorContext::Params params(ctx);
-    params.flr = captured_state->flr;
-    params.function_handle_cache = captured_state->function_handle_cache.get();
-    params.resource_mgr = &captured_state->resource_mgr;
-    params.thread_factory = unbounded_thread_pool_.get_thread_factory();
-    params.thread_pool = &unbounded_thread_pool_;
-    params.cancellation_manager = &captured_state->cancellation_manager;
-    std::function<void()> deregister_fn;
-    TF_RETURN_IF_ERROR(ConnectCancellationManagers(ctx->cancellation_manager(),
-                                                   params.cancellation_manager,
-                                                   &deregister_fn));
-    auto cleanup = gtl::MakeCleanup(std::move(deregister_fn));
-    return captured_state->iterator->GetNext(IteratorContext(std::move(params)),
-                                             out_tensors, end_of_sequence);
+  uint64 start;
+  if (first_) {
+    start = ctx->env()->NowMicros();
   }
+  if (captured_state->iterator) {
+    Status s;
+    EparallaxTensorIndex* out_index;
+    do {
+      IteratorContext::Params params(ctx);
+      params.flr = captured_state->flr;
+      params.function_handle_cache =
+          captured_state->function_handle_cache.get();
+      params.resource_mgr = &captured_state->resource_mgr;
+      params.thread_factory = unbounded_thread_pool_.get_thread_factory();
+      params.thread_pool = &unbounded_thread_pool_;
+      params.cancellation_manager = &captured_state->cancellation_manager;
+      params.index_manager = index_manager_;
+      std::function<void()> deregister_fn;
+      TF_RETURN_IF_ERROR(ConnectCancellationManagers(
+          ctx->cancellation_manager(), params.cancellation_manager,
+          &deregister_fn));
+      auto cleanup = gtl::MakeCleanup(std::move(deregister_fn));
+      s = captured_state->iterator->GetNext(IteratorContext(std::move(params)),
+                                            out_tensors, end_of_sequence,
+                                            out_index);
+    } while (s.ok() && !*end_of_sequence && out_tensors->empty());
+
+    if (s.ok() && !*end_of_sequence && !out_tensors->empty()) {
+      if (first_) {
+        LOG(INFO) << "First run took " << ctx->env()->NowMicros() - start << " usecs";
+      }
+      index_manager_->RecordFinished(out_index);
+    }
+    first_ = false;
+    return s;
+  }
+  first_ = false;
   return errors::FailedPrecondition(
       "GetNext() failed because the iterator has not been initialized. Ensure "
       "that you have run the initializer operation for this iterator before "
@@ -121,6 +142,7 @@ Status IteratorResource::Restore(OpKernelContext* ctx,
     params.thread_factory = unbounded_thread_pool_.get_thread_factory();
     params.thread_pool = &unbounded_thread_pool_;
     params.cancellation_manager = &captured_state->cancellation_manager;
+    params.index_manager = index_manager_;
     std::function<void()> deregister_fn;
     TF_RETURN_IF_ERROR(ConnectCancellationManagers(ctx->cancellation_manager(),
                                                    params.cancellation_manager,
@@ -153,6 +175,7 @@ Status IteratorResource::SetIteratorFromDataset(OpKernelContext* ctx,
   params.thread_factory = unbounded_thread_pool_.get_thread_factory();
   params.thread_pool = &unbounded_thread_pool_;
   params.cancellation_manager = &new_state->cancellation_manager;
+  params.index_manager = index_manager_;
   std::function<void()> deregister_fn;
   TF_RETURN_IF_ERROR(ConnectCancellationManagers(ctx->cancellation_manager(),
                                                  params.cancellation_manager,
@@ -887,6 +910,15 @@ class OneShotIteratorOp : public AsyncOpKernel {
 
 }  // namespace
 
+void IteratorStopOp::Compute(OpKernelContext* ctx) {
+  IteratorResource* iterator;
+  OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &iterator));
+  iterator->SaveIndex();
+  Tensor* output_tensor = nullptr;
+  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &output_tensor));
+  output_tensor->scalar<bool>()() = true;
+}
+
 void IteratorGetNextOp::ComputeAsync(OpKernelContext* ctx, DoneCallback done) {
   IteratorResource* iterator;
   OP_REQUIRES_OK_ASYNC(
@@ -896,6 +928,11 @@ void IteratorGetNextOp::ComputeAsync(OpKernelContext* ctx, DoneCallback done) {
   // owned thread pool.
   background_worker_.Schedule(std::bind(
       [ctx, iterator](DoneCallback done) {
+        if (iterator->ShouldStop()) {
+          while(true) {
+            std::this_thread::sleep_for(std::chrono::seconds(60));
+          }
+        }
         std::vector<Tensor> components;
         bool end_of_sequence = false;
 
@@ -1138,6 +1175,8 @@ REGISTER_KERNEL_BUILDER(Name("ReduceDataset").Device(DEVICE_CPU),
                         ReduceDatasetOp);
 REGISTER_KERNEL_BUILDER(Name("OneShotIterator").Device(DEVICE_CPU),
                         OneShotIteratorOp);
+REGISTER_KERNEL_BUILDER(Name("IteratorStop").Device(DEVICE_CPU),
+                        IteratorStopOp);
 REGISTER_KERNEL_BUILDER(Name("IteratorGetNext").Device(DEVICE_CPU).Priority(2),
                         IteratorGetNextOp);
 REGISTER_KERNEL_BUILDER(Name("IteratorGetNext").Device(DEVICE_GPU).Priority(1),

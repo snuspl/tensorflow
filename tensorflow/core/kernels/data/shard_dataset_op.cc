@@ -108,12 +108,14 @@ class ShardDatasetOp::Dataset : public DatasetBase {
         : DatasetIterator<Dataset>(params), next_index_(0) {}
 
     Status Initialize(IteratorContext* ctx) override {
+      ctx->index_manager()->SetShardID(dataset()->index_);
       return dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_);
     }
 
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    Status GetNextInternal(
+        IteratorContext* ctx, std::vector<Tensor>* out_tensors,
+        bool* end_of_sequence,
+        std::vector<EparallaxTensorIndex*>* parent_indices) override {
       mutex_lock l(mu_);
 
       if (!input_impl_) {
@@ -122,20 +124,25 @@ class ShardDatasetOp::Dataset : public DatasetBase {
       }
 
       std::vector<Tensor> result;
+      EparallaxTensorIndex* index;
       do {
         result.clear();
-        TF_RETURN_IF_ERROR(input_impl_->GetNext(ctx, &result, end_of_sequence));
-        if (*end_of_sequence) {
-          input_impl_.reset();
-          return Status::OK();
-        }
-      } while ((next_index_++ % dataset()->num_shards_) != dataset()->index_);
+        TF_RETURN_IF_ERROR(
+            input_impl_->GetNext(ctx, &result, end_of_sequence, index));
+      } while (!*end_of_sequence &&
+          (next_index_++ % dataset()->num_shards_) != dataset()->index_);
+      if (*end_of_sequence) {
+        input_impl_.reset();
+        return Status::OK();
+      }
+      parent_indices->push_back(index);
 
       while (dataset()->require_non_empty_ &&
              next_index_ < dataset()->num_shards_) {
         std::vector<Tensor> unused_result;
 
-        Status s = input_impl_->GetNext(ctx, &unused_result, end_of_sequence);
+        Status s = this->GetNextFromInput(
+            input_impl_, ctx, &unused_result, end_of_sequence);
         if (*end_of_sequence || errors::IsOutOfRange(s)) {
           return errors::InvalidArgument(
               "There aren't enough elements in this dataset for each shard "

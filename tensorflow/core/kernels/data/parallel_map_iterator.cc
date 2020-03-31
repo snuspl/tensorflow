@@ -63,7 +63,8 @@ class ParallelMapIterator : public DatasetBaseIterator {
         num_parallel_calls_(std::make_shared<model::SharedState>(
             params.num_parallel_calls, mu_, cond_var_)),
         sloppy_(params.sloppy),
-        preserve_cardinality_(params.preserve_cardinality) {
+        preserve_cardinality_(params.preserve_cardinality),
+        ep_next_index_(0) {
     key_prefix_ = base_params.dataset->node_name();
   }
 
@@ -96,11 +97,11 @@ class ParallelMapIterator : public DatasetBaseIterator {
   }
 
   Status GetNextInternal(IteratorContext* ctx, std::vector<Tensor>* out_tensors,
-                         bool* end_of_sequence) override {
+                         bool* end_of_sequence, std::vector<EparallaxTensorIndex*>* parent_indices) override {
     std::shared_ptr<InvocationResult> result;
     {
       mutex_lock l(*mu_);
-      EnsureRunnerThreadStarted(ctx);
+      EnsureRunnerThreadStarted(ctx, parent_indices);
       while (ShouldWait(&result)) {
         RecordStop(ctx);
         cond_var_->wait(l);
@@ -110,7 +111,7 @@ class ParallelMapIterator : public DatasetBaseIterator {
     RecordStop(ctx);
     result->notification.WaitForNotification();
     RecordStart(ctx);
-    return ProcessResult(ctx, result, out_tensors, end_of_sequence);
+    return ProcessResult(ctx, result, out_tensors, end_of_sequence, parent_indices);
   }
 
  protected:
@@ -208,13 +209,13 @@ class ParallelMapIterator : public DatasetBaseIterator {
     bool end_of_input;
   };
 
-  void EnsureRunnerThreadStarted(IteratorContext* ctx)
+  void EnsureRunnerThreadStarted(IteratorContext* ctx, std::vector<EparallaxTensorIndex*>* parent_indices)
       EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
     if (!runner_thread_) {
       auto ctx_copy = std::make_shared<IteratorContext>(*ctx);
       runner_thread_ = ctx->StartThread(
           "tf_data_parallel_map",
-          std::bind(&ParallelMapIterator::RunnerThread, this, ctx_copy));
+          std::bind(&ParallelMapIterator::RunnerThread, this, ctx_copy, parent_indices));
     }
   }
 
@@ -237,12 +238,13 @@ class ParallelMapIterator : public DatasetBaseIterator {
   }
 
   void CallFunction(const std::shared_ptr<IteratorContext>& ctx,
-                    const std::shared_ptr<InvocationResult>& result)
+                    const std::shared_ptr<InvocationResult>& result,
+                    std::vector<EparallaxTensorIndex*>* parent_indices)
       LOCKS_EXCLUDED(*mu_) {
     // Get the next input element.
     std::vector<Tensor> input_element;
     result->status =
-        input_impl_->GetNext(ctx.get(), &input_element, &result->end_of_input);
+        this->GetNextFromInput(input_impl_, ctx.get(), &input_element, &result->end_of_input, parent_indices);
     if (result->end_of_input || !result->status.ok()) {
       CallCompleted(ctx, result);
       return;
@@ -262,7 +264,7 @@ class ParallelMapIterator : public DatasetBaseIterator {
 
   Status ProcessResult(IteratorContext* ctx,
                        const std::shared_ptr<InvocationResult>& result,
-                       std::vector<Tensor>* out_tensors, bool* end_of_sequence)
+                       std::vector<Tensor>* out_tensors, bool* end_of_sequence, std::vector<EparallaxTensorIndex*>* parent_indices)
       LOCKS_EXCLUDED(*mu_) {
     if (!result->end_of_input && result->status.ok()) {
       *out_tensors = std::move(result->return_values);
@@ -289,7 +291,7 @@ class ParallelMapIterator : public DatasetBaseIterator {
     return result->status;
   }
 
-  void RunnerThread(const std::shared_ptr<IteratorContext>& ctx)
+  void RunnerThread(const std::shared_ptr<IteratorContext>& ctx, std::vector<EparallaxTensorIndex*>* parent_indices)
       LOCKS_EXCLUDED(*mu_) {
     RecordStart(ctx.get());
     auto cleanup = gtl::MakeCleanup([this, ctx] { RecordStop(ctx.get()); });
@@ -330,7 +332,7 @@ class ParallelMapIterator : public DatasetBaseIterator {
         cond_var_->notify_all();
       }
       for (const auto& call : new_calls) {
-        CallFunction(ctx, call);
+        CallFunction(ctx, call, parent_indices);
       }
       new_calls.clear();
     }
@@ -416,6 +418,7 @@ class ParallelMapIterator : public DatasetBaseIterator {
   const bool preserve_cardinality_;
   // Counts the number of outstanding calls.
   int64 num_calls_ GUARDED_BY(*mu_) = 0;
+  uint64 ep_next_index_ GUARDED_BY(*mu_);
   std::unique_ptr<IteratorBase> input_impl_;
   // Buffer for storing the invocation results.
   std::deque<std::shared_ptr<InvocationResult>> invocation_results_

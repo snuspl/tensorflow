@@ -629,6 +629,14 @@ Status IteratorGetNextShapeFn(shape_inference::InferenceContext* c) {
 
 }  // namespace
 
+REGISTER_OP("IteratorStop")
+    .Input("iterator: resource")
+    .Output("result: bool")
+    .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+      c->set_output(0, c->Scalar());
+      return Status::OK();
+    });
+
 REGISTER_OP("IteratorGetNext")
     .Input("iterator: resource")
     .Output("components: output_types")

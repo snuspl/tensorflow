@@ -18,6 +18,8 @@ limitations under the License.
 #include <deque>
 #include <memory>
 #include <unordered_map>
+#include <fstream>
+#include <cstdlib>
 
 #include "absl/memory/memory.h"
 #include "tensorflow/core/framework/attr_value.pb.h"
@@ -54,6 +56,131 @@ namespace tensorflow {
 // "tensorflow/core/graph/...".
 class GraphDefBuilder;
 class Node;
+class EparallaxTensorIndex;
+
+string ToString(std::vector<EparallaxTensorIndex*> indices);
+
+class EparallaxTensorIndex {
+ public:
+  EparallaxTensorIndex(string iterator_id,
+                       std::vector<EparallaxTensorIndex*>* parent_indices,
+                       int64 local_index) {
+    iterator_id_ = iterator_id;
+    parent_indices_ = parent_indices;
+    local_index_ = local_index;
+  }
+
+  ~EparallaxTensorIndex() {
+    for (auto parent_index : *parent_indices_) {
+      delete parent_index;
+    }
+    delete parent_indices_;
+  }
+
+  string ToString() const {
+    return op_type() + "(" + tensorflow::ToString(*parent_indices()) + ", " +
+        std::to_string(local_index()) + ")";
+  }
+
+  string iterator_id() const { return iterator_id_; }
+  string op_type() const {
+    size_t pos = iterator_id_.find_last_of("::");
+    if (iterator_id_.substr(pos-2, 1) != "]") {
+      return iterator_id_.substr(pos+1, iterator_id_.length()-pos-1);
+    }
+    pos = pos - 2;
+    int level = 1;
+    while (level != 0) {
+      --pos;
+      if (iterator_id_.substr(pos, 1) == "]") {
+        ++level;
+      }
+      else if (iterator_id_.substr(pos, 1) == "[") {
+        --level;
+        if (level == 0) {
+          break;
+        }
+      }
+    }
+    pos = iterator_id_.substr(0, pos).find_last_of("::");
+    return iterator_id_.substr(pos+1, iterator_id_.length()-pos-1);
+  }
+  std::vector<EparallaxTensorIndex*>* parent_indices() const {
+    return parent_indices_;
+  }
+  int64 local_index() const { return local_index_; }
+
+  friend bool operator==(const EparallaxTensorIndex& index_1,
+                         const EparallaxTensorIndex& index_2);
+  friend bool operator!=(const EparallaxTensorIndex& index_1,
+                         const EparallaxTensorIndex& index_2);
+
+ private:
+  string iterator_id_;
+  std::vector<EparallaxTensorIndex*>* parent_indices_;
+  int64 local_index_;
+};
+
+bool operator==(const std::vector<EparallaxTensorIndex*>& indices_1,
+                const std::vector<EparallaxTensorIndex*>& indices_2);
+
+inline bool operator==(const EparallaxTensorIndex& index_1,
+                       const EparallaxTensorIndex& index_2) {
+  if (index_1.iterator_id() != index_2.iterator_id()) return false;
+
+  if (index_1.local_index() != index_2.local_index()) {
+    return false;
+  } else {
+    return *index_1.parent_indices() == *index_2.parent_indices();
+  }
+}
+
+string ToString(std::vector<EparallaxTensorIndex*> indices) {
+  string ret = "<";
+  for (auto it=indices.begin(); it!=indices.end(); it++) {
+    ret = ret + (*it)->ToString() + ", ";
+  }
+  return ret + ">";
+}
+
+inline bool operator!=(const EparallaxTensorIndex& index_1,
+                       const EparallaxTensorIndex& index_2) {
+  return !(index_1 == index_2);
+}
+
+inline bool operator==(const std::vector<EparallaxTensorIndex*>& indices_1,
+                       const std::vector<EparallaxTensorIndex*>& indices_2) {
+  if (indices_1.size() != indices_2.size()) return false;
+  for (int64 i=0; i<indices_1.size(); i++) {
+    if (*indices_1[i] != *indices_2[i]) return false;
+  }
+  return true;
+}
+
+inline bool operator!=(const std::vector<EparallaxTensorIndex*>& indices_1,
+                       const std::vector<EparallaxTensorIndex*>& indices_2) {
+  return !(indices_1 == indices_2);
+}
+
+inline std::ostream& operator<<(std::ostream& os,
+                                const std::vector<EparallaxTensorIndex*>& t);
+
+inline std::ostream& operator<<(std::ostream& os,
+                                const EparallaxTensorIndex& t) {
+  os << t.iterator_id() << "(" << *t.parent_indices() << ", " <<
+        t.local_index() << ")";
+  return os;
+}
+
+inline std::ostream& operator<<(std::ostream& os,
+                                const std::vector<EparallaxTensorIndex*>& t) {
+  os << "<";
+  for (auto it=t.begin(); it!=t.end(); it++) {
+    os << (*it)->ToString() << ", ";
+  }
+  os << ">";
+  return os;
+}
 
 namespace data {
 
@@ -273,6 +400,337 @@ class GraphDefBuilderWrapper {
 class StatsAggregator;
 class FunctionHandleCache;
 
+typedef std::map<string, std::vector<EparallaxTensorIndex*>*> IndexTree;
+// Class for storing indices.
+// Stores indices as a map of (iterator_id -> (parent_indices -> index))
+class MultiLevelIndexTree {
+ public:
+  void Push(EparallaxTensorIndex* index) {
+    std::vector<EparallaxTensorIndex*>* indices = Get(
+        index->iterator_id(), ToString(*index->parent_indices()));
+    indices->push_back(index);
+    empty_ = false;
+  }
+
+  void Remove(EparallaxTensorIndex* index) {
+    std::vector<EparallaxTensorIndex*>* indices = Get(
+        index->iterator_id(), ToString(*index->parent_indices()));
+    for (auto it=indices->begin(); it<indices->end();) {
+      if (*index == **it) {
+        indices->erase(it);
+      } else {
+        it++;
+      }
+    }
+  }
+
+  bool Contains(EparallaxTensorIndex *index) {
+    std::vector<EparallaxTensorIndex*>* indices = Get(
+        index->iterator_id(), ToString(*index->parent_indices()));
+    for (auto buffered_index : *indices) {
+      if (*index == *buffered_index) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  void Clear(string iterator_id) {
+    string key;
+    IndexTree* tree;
+    for (auto& it : tree_) {
+      key = it.first;
+      tree = it.second;
+      if (key.substr(0, iterator_id.length()) == iterator_id) {
+        if (key.length() > iterator_id.length()) {
+          tree->clear();
+        }
+      }
+    }
+  }
+
+  IndexTree* Get(string iterator_id) {
+    auto it = tree_.find(iterator_id);
+    if (it == tree_.end()) {
+      IndexTree* tree = new IndexTree;
+      tree_.insert(std::make_pair(iterator_id, tree));
+      return tree;
+    } else {
+      return it->second;
+    }
+  }
+
+  std::vector<EparallaxTensorIndex*>* Get(string iterator_id,
+                                          string parent_indices) {
+    IndexTree* tree = Get(iterator_id);
+    if (tree->find(parent_indices) == tree->end()) {
+      std::vector<EparallaxTensorIndex*>* q =
+          new std::vector<EparallaxTensorIndex*>;
+      tree->insert(std::make_pair(parent_indices, q));
+      return q;
+    } else {
+      return tree->find(parent_indices)->second;
+    }
+  }
+
+  std::vector<std::vector<EparallaxTensorIndex*>*> GetAll() {
+    std::vector<std::vector<EparallaxTensorIndex*>*> index_vectors;
+    for (auto const& it : tree_) {
+      for (auto const& i: *it.second) {
+        index_vectors.push_back(i.second);
+      }
+    }
+    return index_vectors;
+  }
+
+  bool Empty(string iterator_id) {
+    for (auto& it : *Get(iterator_id)) {
+      if (!it.second->empty()) return false;
+    }
+    return true;
+  }
+
+  bool Empty() { return empty_; }
+
+  std::map<string, IndexTree*> tree() { return tree_; }
+
+ private:
+  std::map<string, IndexTree*> tree_;
+  bool empty_ = true;
+};
+
+// Class for managing indexing.
+class IndexManager {
+ public:
+  IndexManager() :
+      processed_mu_(std::make_shared<mutex>()),
+      issued_mu_(std::make_shared<mutex>()),
+      infertile_mu_(std::make_shared<mutex>()),
+      children_mu_(std::make_shared<mutex>()),
+      processed_indices_(std::make_shared<MultiLevelIndexTree>()),
+      issued_indices_(std::make_shared<MultiLevelIndexTree>()),
+      infertile_indices_(std::make_shared<MultiLevelIndexTree>()),
+      children_indices_(std::make_shared<
+          std::map<string, std::vector<EparallaxTensorIndex*>*>>()),
+      ckpt_dir_(std::getenv("EPARALLAX_INDEX_CKPT_DIR")),
+      shard_index_(0) {
+    Restore();
+  }
+
+  ~IndexManager() { SaveInternal(); }
+
+  EparallaxTensorIndex* IssueNewIndex(
+      string prefix, std::vector<EparallaxTensorIndex*>* parent_indices);
+
+  void RecordFinished(EparallaxTensorIndex* index);
+
+  void RecordInfertile(EparallaxTensorIndex* index);
+
+  bool AlreadyProcessed(EparallaxTensorIndex* index);
+
+  void ResetIndex(string iterator_id);
+
+  void SetShardID(int64 index);
+
+  bool IsFirstCall(string iterator_id);
+
+  bool IsOneToManyOp(string iterator_id) {
+    //uint64 start = Env::Default()->NowMicros();
+    size_t pos = iterator_id.find_last_of("::");
+    string op_name = iterator_id.substr(pos+1, iterator_id.length()-pos-1);
+    bool ret = op_name == "FlatMap" || op_name == "Interleave" ||
+        op_name == "ParallelInterleaveV2" || op_name == "ParallelInterleave" ||
+        op_name == "FiniteRepeat" || op_name == "ForeverRepeat";
+    //LOG(INFO) << "IsOneToManyOp took " << Env::Default()->NowMicros() - start << " usecs.";
+    return ret;
+  }
+
+  void Save() {
+    SaveInternal();
+  }
+
+ protected:
+  void RemoveChildren(EparallaxTensorIndex* index) {
+    mutex_lock l(*children_mu_);
+    auto it = children_indices_->find(index->ToString());
+    if (it == children_indices_->end()) {
+      return;
+    }
+    std::vector<EparallaxTensorIndex*>* children_indices = it->second;
+    for (EparallaxTensorIndex* index : *children_indices) {
+      processed_indices_->Remove(index);
+    }
+  }
+
+  bool ChildrenAllProcessed(EparallaxTensorIndex* index)
+      EXCLUSIVE_LOCKS_REQUIRED(*children_mu_) {
+    //uint64 start = Env::Default()->NowMicros();
+    auto it = children_indices_->find(index->ToString());
+    std::vector<EparallaxTensorIndex*>* q;
+    if (it == children_indices_->end()) {
+      q = new std::vector<EparallaxTensorIndex*>;
+      children_indices_->insert(std::make_pair(index->ToString(), q));
+    } else {
+      q = it->second;
+    }
+    for (auto it = q->begin(); it < q->end();) {
+      if (processed_indices_->Contains(*it)) {
+        q->erase(it);
+      } else {
+        //LOG(INFO) << "ChildrenAllProcessed took " << Env::Default()->NowMicros() - start << " usecs.";
+        return false;
+      }
+    }
+    //LOG(INFO) << "ChildrenAllProcessed took " << Env::Default()->NowMicros() - start << " usecs.";
+    return true;
+  }
+
+  void Restore() {
+    string ckpt_file_path = ckpt_dir_ + "/index_ckpt";
+    std::ifstream ckpt_file(ckpt_file_path.data());
+    if (ckpt_file.is_open()) {
+      string line;
+      std::vector<EparallaxTensorIndex*> buf;
+      while (getline(ckpt_file, line)) {
+        if (line == "\n") continue;
+        if (line.substr(0, 15) == "processed_index") {
+          size_t delimiter_pos = line.find(":");
+          string val = line.substr(delimiter_pos + 1);
+          EparallaxTensorIndex* index = DeserializeIndex(val, "");
+          if (processed_indices_->Contains(index)) {
+            delete index;
+            continue;
+          }
+          processed_indices_->Push(index);
+          if (index->iterator_id().substr(index->iterator_id().length()-13, 13)
+              == "ForeverRepeat") {
+            buf.push_back(index);
+          }
+        }
+      }
+      int64 max_local_index = 0;
+      for (auto index : buf) {
+        if (index->local_index() > max_local_index) {
+          max_local_index = index->local_index();
+        }
+      }
+      for (auto index : buf) {
+        if (index->local_index() < max_local_index) {
+          issued_indices_->Push(index);
+        }
+      }
+      ckpt_file.close();
+    }
+  }
+
+  void SaveInternal() {
+    std::ofstream ckpt_file;
+    string ckpt_file_path = ckpt_dir_ + "/index_ckpt_" +
+        std::to_string(shard_index_);
+    ckpt_file.open(ckpt_file_path.data());
+    if (ckpt_file.is_open()) {
+      for (auto processed_indices : processed_indices_->GetAll()) {
+        for (auto processed_index : *processed_indices) {
+          ckpt_file << "processed_index:" << *processed_index << "\n";
+        }
+      }
+      ckpt_file.close();
+    }
+  }
+
+  std::vector<EparallaxTensorIndex*>* DeserializeIndices(string line,
+                                                         string base) {
+    line = line.substr(1, line.length()-1);
+    size_t pos = 0;
+    int level = 0;
+    int level2 = 0;
+    bool found = false;
+    std::vector<EparallaxTensorIndex*>* v =
+        new std::vector<EparallaxTensorIndex*>;
+    while (true) {
+      if (level2 == 0 && line[pos] == '(') {
+        level++;
+        found = true;
+      } else if (level2 == 0 && line[pos] == ')') {
+        level--;
+        found = true;
+      } else if (line[pos] == '[') {
+        level2++;
+      } else if (line[pos] == ']') {
+        level2--;
+      } else if (found && level == 0 && level2 == 0) {
+        v->push_back(DeserializeIndex(line.substr(0, pos), base));
+        if (line.length() - pos < 4) {
+          break;
+        } else {
+          line = line.substr(pos+2);
+          pos = 0;
+          found = false;
+        }
+      }
+      pos++;
+    }
+    return v;
+  }
+
+  EparallaxTensorIndex* DeserializeIndex(string line, string base) {
+    size_t pos = 0;
+    int level = 0;
+    while (true) {
+      if (line[pos] == '[') {
+        level++;
+      } else if (line[pos] == ']') {
+        level--;
+      } else if (level == 0 && line[pos] == '(') {
+        break;
+      }
+      pos++;
+    }
+
+    size_t comma_pos = line.find_last_of(",");
+    string iterator_id = line.substr(0, pos);
+    if (base != "") {
+      if (iterator_id.find("[") == string::npos) {
+        iterator_id = base + "::" + iterator_id;
+      } else {
+        iterator_id = base.substr(0, base.find_last_of("::")+1) + iterator_id;
+      }
+    }
+    string parent_indices = line.substr(pos+1,
+                                       comma_pos-pos-1);
+    string local_index = line.substr(comma_pos+2,
+                                     line.length()-comma_pos-3);
+    EparallaxTensorIndex* index;
+    // TODO: Connect parent and children
+    if (parent_indices == "<>") {
+      index = new EparallaxTensorIndex(iterator_id,
+                                       new std::vector<EparallaxTensorIndex*>,
+                                       atoi(local_index.c_str()));
+    } else {
+      index = new EparallaxTensorIndex(iterator_id,
+                                       DeserializeIndices(parent_indices,
+                                                          iterator_id),
+                                       atoi(local_index.c_str()));
+    }
+    return index;
+  }
+
+ private:
+  std::shared_ptr<mutex> processed_mu_;
+  std::shared_ptr<MultiLevelIndexTree> processed_indices_
+      GUARDED_BY(*processed_mu_);
+  std::shared_ptr<mutex> issued_mu_;
+  std::shared_ptr<MultiLevelIndexTree> issued_indices_ GUARDED_BY(*issued_mu_);
+  std::shared_ptr<mutex> infertile_mu_;
+  std::shared_ptr<MultiLevelIndexTree> infertile_indices_
+      GUARDED_BY(*infertile_mu_);
+  std::shared_ptr<mutex> children_mu_;
+  std::shared_ptr<std::map<string, std::vector<EparallaxTensorIndex*>*>>
+      children_indices_ GUARDED_BY(*children_mu_);
+  int64 shard_index_;
+  string ckpt_dir_;
+};
+
 // A utility class for running a function and ensuring that there is always a
 // `tensorflow::data` symbol on the stack.
 class Runner {
@@ -312,7 +770,8 @@ class IteratorContext {
           runner_threadpool_size(ctx->runner_threadpool_size()),
           stats_aggregator(ctx->stats_aggregator()),
           thread_factory(ctx->thread_factory()),
-          thread_pool(ctx->thread_pool()) {}
+          thread_pool(ctx->thread_pool()),
+          index_manager(ctx->index_manager()) {}
 
     explicit Params(OpKernelContext* ctx)
         : env(ctx->env()), flr(ctx->function_library()) {
@@ -382,6 +841,9 @@ class IteratorContext {
 
     // A shared thread pool to schedule computation into.
     thread::ThreadPoolInterface* thread_pool = nullptr;
+
+    // Indexing manager.
+    std::shared_ptr<IndexManager> index_manager = nullptr;
   };
 
   explicit IteratorContext(IteratorContext* ctx) : params_(Params{ctx}) {}
@@ -429,6 +891,8 @@ class IteratorContext {
   }
 
   thread::ThreadPoolInterface* thread_pool() { return params_.thread_pool; }
+
+  std::shared_ptr<IndexManager> index_manager() { return params_.index_manager; }
 
   Params params() { return params_; }
 
@@ -515,7 +979,20 @@ class IteratorBase {
   // TODO(mrry): Define `GetNextAsync()` or `GetNextManyAsync()`, and
   // potentially remove this method.
   virtual Status GetNext(IteratorContext* ctx, std::vector<Tensor>* out_tensors,
-                         bool* end_of_sequence) = 0;
+                         bool* end_of_sequence,
+                         EparallaxTensorIndex*& out_index) = 0;
+
+  Status GetNext(IteratorContext* ctx, std::vector<Tensor>* out_tensors,
+                 bool* end_of_sequence) {
+    EparallaxTensorIndex* unused_index;
+    Status s = GetNext(ctx, out_tensors, end_of_sequence, unused_index);
+    return s;
+  }
+
+  Status GetNext(IteratorContext&& ctx, std::vector<Tensor>* out_tensors,
+                 bool* end_of_sequence, EparallaxTensorIndex*& out_index) {
+    return GetNext(&ctx, out_tensors, end_of_sequence, out_index);
+  }
 
   Status GetNext(IteratorContext&& ctx, std::vector<Tensor>* out_tensors,
                  bool* end_of_sequence) {
@@ -764,6 +1241,7 @@ class DatasetBase : public core::RefCounted {
   const string node_name_;
 };
 
+typedef std::tuple<EparallaxTensorIndex*, Status, std::vector<Tensor>, bool> BufferItem;
 // Represents an iterator that is associated with a particular dataset.
 class DatasetBaseIterator : public IteratorBase {
  public:
@@ -799,7 +1277,42 @@ class DatasetBaseIterator : public IteratorBase {
   virtual string BuildTraceMeName() { return params_.prefix; }
 
   Status GetNext(IteratorContext* ctx, std::vector<Tensor>* out_tensors,
-                 bool* end_of_sequence) final;
+                 bool* end_of_sequence, EparallaxTensorIndex*& out_index) final;
+
+  Status GetNextFromInput(
+      IteratorBase* const input_impl, IteratorContext* ctx,
+      std::vector<Tensor>* out_tensors, bool* end_of_sequence,
+      std::vector<EparallaxTensorIndex*>* parent_indices);
+
+  Status GetNextFromInput(
+      std::unique_ptr<IteratorBase> const &input_impl, IteratorContext* ctx,
+      std::vector<Tensor>* out_tensors, bool* end_of_sequence,
+      std::vector<EparallaxTensorIndex*>* parent_indices) {
+    return GetNextFromInput(input_impl.get(), ctx, out_tensors, end_of_sequence,
+                            parent_indices);
+  }
+
+  Status GetNextFromInput(
+      std::unique_ptr<IteratorBase> const &input_impl, IteratorContext* ctx,
+      std::vector<Tensor>* out_tensors, bool* end_of_sequence) {
+    return GetNextFromInput(input_impl.get(), ctx, out_tensors, end_of_sequence,
+                            nullptr);
+  }
+
+  Status GetNextFromInput(
+      IteratorBase* const &input_impl, IteratorContext* ctx,
+      std::vector<Tensor>* out_tensors, bool* end_of_sequence) {
+    return GetNextFromInput(input_impl, ctx, out_tensors, end_of_sequence,
+                            nullptr);
+  }
+
+  Status GetNextFromInput(
+      std::unique_ptr<IteratorBase> const &input_impl, IteratorContext&& ctx,
+      std::vector<Tensor>* out_tensors, bool* end_of_sequence,
+      std::vector<EparallaxTensorIndex*>* parent_indices) {
+    return GetNextFromInput(input_impl, &ctx, out_tensors, end_of_sequence,
+                            parent_indices);
+  }
 
   Status Save(SerializationContext* ctx, IteratorStateWriter* writer) final {
     if (params_.dataset->IsStateful()) {
@@ -813,7 +1326,8 @@ class DatasetBaseIterator : public IteratorBase {
   // Internal implementation of GetNext that is wrapped in tracing logic.
   virtual Status GetNextInternal(IteratorContext* ctx,
                                  std::vector<Tensor>* out_tensors,
-                                 bool* end_of_sequence) = 0;
+                                 bool* end_of_sequence,
+                                 std::vector<EparallaxTensorIndex*>* parent_indices) = 0;
 
   string full_name(const string& name) const {
     return strings::StrCat(params_.prefix, ":", name);
@@ -924,11 +1438,13 @@ class DatasetIterator : public DatasetBaseIterator {
  protected:
   virtual Status GetNextInternal(IteratorContext* ctx,
                                  std::vector<Tensor>* out_tensors,
-                                 bool* end_of_sequence) = 0;
+                                 bool* end_of_sequence,
+                                 std::vector<EparallaxTensorIndex*>* parent_indices) = 0;
 
  private:
   const DatasetType* const typed_dataset_;  // Not owned.
 };
+
 
 template <typename T>
 Status ParseScalarArgument(OpKernelContext* ctx,

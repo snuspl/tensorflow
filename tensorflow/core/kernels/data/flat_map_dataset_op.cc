@@ -107,7 +107,7 @@ class FlatMapDatasetOp::Dataset : public DatasetBase {
   class Iterator : public DatasetIterator<Dataset> {
    public:
     explicit Iterator(const Params& params)
-        : DatasetIterator<Dataset>(params) {}
+        : DatasetIterator<Dataset>(params), current_element_index_(nullptr) {}
 
     Status Initialize(IteratorContext* ctx) override {
       TF_RETURN_IF_ERROR(
@@ -116,9 +116,10 @@ class FlatMapDatasetOp::Dataset : public DatasetBase {
           ctx, &instantiated_captured_func_);
     }
 
-    Status GetNextInternal(IteratorContext* ctx,
-                           std::vector<Tensor>* out_tensors,
-                           bool* end_of_sequence) override {
+    Status GetNextInternal(
+        IteratorContext* ctx, std::vector<Tensor>* out_tensors,
+        bool* end_of_sequence,
+        std::vector<EparallaxTensorIndex*>* parent_indices) override {
       mutex_lock l(mu_);
       do {
         if (!input_impl_) {
@@ -129,8 +130,9 @@ class FlatMapDatasetOp::Dataset : public DatasetBase {
           // We are currently precessing a mapped element, so try to get the
           // next subelement.
           bool end_of_element;
-          TF_RETURN_IF_ERROR(current_element_iterator_->GetNext(
-              ctx, out_tensors, &end_of_element));
+          parent_indices->push_back(current_element_index_);
+          TF_RETURN_IF_ERROR(this->GetNextFromInput(
+              current_element_iterator_, ctx, out_tensors, &end_of_element));
           if (!end_of_element) {
             // Produce the subelement as output.
             *end_of_sequence = false;
@@ -139,17 +141,24 @@ class FlatMapDatasetOp::Dataset : public DatasetBase {
 
           // We have reached the end of the current element, so maybe move on
           // to the next element.
+          ctx->index_manager()->RecordInfertile(current_element_index_);
           current_element_iterator_.reset();
+          current_element_index_ = nullptr;
         }
 
         // Get the next element from the input dataset.
         captured_func_inputs_.clear();
-        TF_RETURN_IF_ERROR(
-            input_impl_->GetNext(ctx, &captured_func_inputs_, end_of_sequence));
-        if (*end_of_sequence) {
-          input_impl_.reset();
-          return Status::OK();
-        }
+        do {
+          parent_indices->clear();
+          TF_RETURN_IF_ERROR(input_impl_->GetNext(
+              ctx, &captured_func_inputs_, end_of_sequence,
+              current_element_index_));
+          element_index_++;
+          if (*end_of_sequence) {
+            input_impl_.reset();
+            return Status::OK();
+          }
+        } while (captured_func_inputs_.empty());
 
         TF_RETURN_IF_ERROR(BuildCurrentElementIteratorLocked(ctx));
       } while (true);
@@ -233,7 +242,7 @@ class FlatMapDatasetOp::Dataset : public DatasetBase {
     Status BuildCurrentElementIteratorLocked(IteratorContext* ctx)
         EXCLUSIVE_LOCKS_REQUIRED(mu_) {
       return MakeIteratorFromInputElement(
-          ctx, captured_func_inputs_, element_index_++,
+          ctx, captured_func_inputs_, current_element_index_->ToString(),
           *instantiated_captured_func_, prefix(), &current_element_iterator_);
     }
 
@@ -241,6 +250,7 @@ class FlatMapDatasetOp::Dataset : public DatasetBase {
     size_t element_index_ GUARDED_BY(mu_) = 0;
     std::unique_ptr<IteratorBase> input_impl_ GUARDED_BY(mu_);
     std::unique_ptr<IteratorBase> current_element_iterator_ GUARDED_BY(mu_);
+    EparallaxTensorIndex* current_element_index_ GUARDED_BY(mu_);
     std::vector<Tensor> captured_func_inputs_ GUARDED_BY(mu_);
     std::unique_ptr<InstantiatedCapturedFunction> instantiated_captured_func_;
   };

@@ -426,6 +426,9 @@ class Iterator(trackable.Trackable):
         name=name)
     return structure.from_tensor_list(self._element_spec, flat_ret)
 
+  def get_stop(self, name=None):
+    return gen_dataset_ops.iterator_stop(self._iterator_resource, name=name)
+
   def string_handle(self, name=None):
     """Returns a string-valued `tf.Tensor` that represents this iterator.
 
@@ -735,6 +738,9 @@ class IteratorV2(trackable.Trackable, composite_tensor.CompositeTensor):
     """
     del name
     return self._next_internal()
+
+  def get_stop(self, name=None):
+    return gen_dataset_ops.iterator_stop(self._iterator_resource, name=name)
 
   def _gather_saveables_for_checkpoint(self):
 
