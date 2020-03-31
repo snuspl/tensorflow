@@ -48,7 +48,7 @@ def run_steps(graph, n, num_steps, initializer=None, measure_time=True):
         return res
 
 def build_imagenet_input_pipeline(batch_size, num_workers, worker_id,
-                                  repeat=True, shuffle=False):
+                                  repeat=True, shuffle=True):
     file_names = [
             "/cmsdata/ssd1/cmslab/imagenet-data/aws/train-{:05d}-of-01024"
             .format(i) for i in range(256, 256+4)
@@ -56,7 +56,7 @@ def build_imagenet_input_pipeline(batch_size, num_workers, worker_id,
     file_names.sort()
     num_splits = 1
     batch_size_per_split = batch_size // num_splits
-    ds = tf.data.TFRecordDataset.list_files(file_names, shuffle=shuffle)
+    ds = tf.data.TFRecordDataset.list_files(file_names, shuffle=False)
     ds_ = ds.shard(num_workers, worker_id)
     ds = ds_.apply(
         tf.data.experimental.parallel_interleave(

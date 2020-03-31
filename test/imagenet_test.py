@@ -14,7 +14,7 @@ def test_imagenet_1():
     do_initialize_ckpt()
     res = flatten(run_steps(g, [n], 1000))
     res += flatten(run_steps(g, [n], 4004))
-    assert all([e == r for e, r in zip(expected_result, res)])
+    assert set_eq(expected_result, res)
 
 @initialize_ckpt
 def test_imagenet_2():
@@ -45,7 +45,7 @@ def test_imagenet_3():
     do_initialize_ckpt()
     res = flatten(run_steps(g, [n1, n2], 1000))
     res += flatten(run_steps(g, [n1, n2], 1502))
-    assert all([e == r for e, r in zip(expected_result, res)])
+    assert set_eq(expected_result, res)
 
 @initialize_ckpt
 def test_imagenet_scale_out_1():
