@@ -131,9 +131,7 @@ class ShuffleDatasetOpBase::ShuffleDatasetBase : public DatasetBase {
       mutex_lock l(mu_);
       int64 start_micros = ctx->env()->NowMicros();
       int64 num_log_entries = 0;
-      bool first_call = false;
       if (!input_impl_ && epoch_ == 0) {
-        first_call = true;
         TF_RETURN_IF_ERROR(this->dataset()->input_->MakeIterator(
             ctx, this->prefix(), &input_impl_));
       }
@@ -152,10 +150,10 @@ class ShuffleDatasetOpBase::ShuffleDatasetBase : public DatasetBase {
           TF_RETURN_IF_ERROR(input_impl_->GetNext(
               ctx, &input_element, &end_of_input_sequence, index));
           if (!end_of_input_sequence) {
-            first_call = false;
             break;
           }
-          if (first_call && this->dataset()->count_ == -1) {
+          if (ctx->index_manager()->IsFirstCall(this->prefix()) &&
+              this->dataset()->count_ == -1) {
             // If the first call to GetNext() fails because the end
             // of sequence has been reached, we terminate the
             // iteration immediately. (Otherwise, this iterator
