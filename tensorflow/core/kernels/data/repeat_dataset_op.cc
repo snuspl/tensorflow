@@ -217,6 +217,7 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
 
     Status Initialize(IteratorContext* ctx) override {
       mutex_lock l(mu_);
+      first_call_ = ctx->index_manager()->IsFirstCall(prefix());
       return dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_);
     }
 
@@ -233,7 +234,7 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
         Status s = this->GetNextFromInput(
             input_impl_, ctx, out_tensors, end_of_sequence, parent_indices);
         DCHECK(!*end_of_sequence || out_tensors->empty());
-        if (ctx->index_manager()->IsFirstCall(prefix()) && *end_of_sequence) {
+        if (first_call_ && *end_of_sequence) {
           // If the first call to GetNext() fails because the end
           // of sequence has been reached, we terminate the
           // iteration immediately. (Otherwise, this iterator
@@ -247,7 +248,7 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
         } else {
           ctx->index_manager()->ResetIndex(prefix());
           input_impl_.reset();
-          first_call_ = true;
+          first_call_ = ctx->index_manager()->IsFirstCall(prefix());
         }
       } while (true);
     }
