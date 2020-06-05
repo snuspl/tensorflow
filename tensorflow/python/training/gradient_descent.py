@@ -21,25 +21,23 @@ from __future__ import print_function
 from tensorflow.python.framework import ops
 from tensorflow.python.ops import math_ops
 from tensorflow.python.ops import resource_variable_ops
+from tensorflow.python.ops import variables
 from tensorflow.python.training import optimizer
 from tensorflow.python.training import training_ops
+from tensorflow.python.training import moving_averages
 from tensorflow.python.util.tf_export import tf_export
 
 
-@tf_export(v1=["train.GradientDescentOptimizer"])
-class GradientDescentOptimizer(optimizer.Optimizer):
-  """Optimizer that implements the gradient descent algorithm.
+class GradientDescentOptimizerBase(optimizer.Optimizer):
+  """Base class for gradient descent algorithms.
   """
 
-  def __init__(self, learning_rate, use_locking=False, name="GradientDescent"):
+  def __init__(self, use_locking, name):
     """Construct a new gradient descent optimizer.
 
     Args:
-      learning_rate: A Tensor or a floating point value.  The learning
-        rate to use.
       use_locking: If True use locks for update operations.
-      name: Optional name prefix for the operations created when applying
-        gradients. Defaults to "GradientDescent".
+      name: Name prefix for the operations created when applying gradients.
 
     @compatibility(eager)
     When eager execution is enabled, `learning_rate` can be a callable that
@@ -48,9 +46,7 @@ class GradientDescentOptimizer(optimizer.Optimizer):
     functions.
     @end_compatibility
     """
-    super(GradientDescentOptimizer, self).__init__(use_locking, name)
-    self._learning_rate = learning_rate
-    self._learning_rate_tensor = None
+    super(GradientDescentOptimizerBase, self).__init__(use_locking, name)
 
   def _apply_dense(self, grad, var):
     return training_ops.apply_gradient_descent(
@@ -77,6 +73,93 @@ class GradientDescentOptimizer(optimizer.Optimizer):
     return var.scatter_sub(delta, use_locking=self._use_locking)
 
   def _prepare(self):
+    raise NotImplementedError
+
+
+@tf_export(v1=["train.GradientDescentOptimizer"])
+class GradientDescentOptimizer(GradientDescentOptimizerBase):
+  """Optimizer that implements the gradient descent algorithm.
+  """
+
+  def __init__(self, learning_rate, use_locking=False, name="GradientDescent"):
+    """Construct a new gradient descent optimizer.
+
+    Args:
+      learning_rate: A Tensor or a floating point value.  The learning
+        rate to use.
+      use_locking: If True use locks for update operations.
+      name: Optional name prefix for the operations created when applying
+        gradients. Defaults to "GradientDescent".
+
+    @compatibility(eager)
+    When eager execution is enabled, `learning_rate` can be a callable that
+    takes no arguments and returns the actual value to use. This can be useful
+    for changing these values across different invocations of optimizer
+    functions.
+    @end_compatibility
+    """
+    super(GradientDescentOptimizer, self).__init__(use_locking, name)
+    self._learning_rate = learning_rate
+    self._learning_rate_tensor = None
+
+  def _prepare(self):
     learning_rate = self._call_if_callable(self._learning_rate)
     self._learning_rate_tensor = ops.convert_to_tensor(
         learning_rate, name="learning_rate")
+
+
+@tf_export(v1=["train.AdaScaleGradientDescentOptimizer"])
+class AdaScaleGradientDescentOptimizer(GradientDescentOptimizerBase):
+  """Optimizer that implements the AdaScale gradient descent algorithm.
+  """
+
+  def __init__(self, learning_rate, aggregated_grads, aggregated_squared_grads,
+               scale=1, use_locking=False, name="AdaScaleGradientDescent"):
+    """Construct a new AdaScale gradient descent optimizer.
+
+    Args:
+      learning_rate: A Tensor or a floating point value.  The learning
+        rate to use.
+      aggregated_grads: Average of all local gradients
+      aggregated_squared_grads: Sum of squares of all local gradients
+      scale: Scaling factor where
+        `total batch size` == `(fixed) per-worker batch size` * `scale`
+      use_locking: If True use locks for update operations.
+      name: Optional name prefix for the operations created when applying
+        gradients. Defaults to "AdaScaleGradientDescent".
+
+    @compatibility(eager)
+    When eager execution is enabled, `learning_rate` can be a callable that
+    takes no arguments and returns the actual value to use. This can be useful
+    for changing these values across different invocations of optimizer
+    functions.
+    @end_compatibility
+    """
+    super(AdaScaleGradientDescentOptimizer, self).__init__(use_locking, name)
+    self._learning_rate = self._call_if_callable(learning_rate)
+    self._learning_rate_tensor = None
+    self._square_of_sum_grads = sum([
+        math_ops.reduce_sum(math_ops.multiply(grad, grad))
+        for grad in aggregated_grads * scale
+    ])
+    self._sum_of_squared_grads = sum(aggregated_squared_grads)
+    self._scale = scale
+    self._decay = max(1 - self._scale/1000, 0)
+    self._gain_ratio = variables.Variable(1.0, name="AdaScaleGainRatio")
+
+  def _prepare(self):
+    sigma_square = self._sum_of_squared_grads\
+                   - self._scale * self._square_of_sum_grads / (self._scale-1)
+    sigma_square = math_ops.maximum(sigma_square, 1e-6)
+    mu_square = self._square_of_sum_grads - sigma_square
+    mu_square = math_ops.maximum(mu_square, 0.0)
+    gain_ratio = (sigma_square + mu_square) /\
+                 (sigma_square/self._scale + mu_square)
+    update_gain_ratio = moving_averages.assign_moving_average(self._gain_ratio,
+                                                              gain_ratio,
+                                                              self._decay)
+    with ops.control_dependencies([update_gain_ratio]):
+        self._learning_rate_tensor = self._gain_ratio * self._learning_rate
+
+  def get_gain_ratio(self):
+      return self._gain_ratio
