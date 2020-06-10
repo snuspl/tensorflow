@@ -133,7 +133,7 @@ class ShuffleDatasetOpBase::ShuffleDatasetBase : public DatasetBase {
       int64 num_log_entries = 0;
       bool first_call = false;
       if (!input_impl_ && epoch_ == 0) {
-        first_call = true;
+        first_call = ctx->index_manager()->IsFirstCall(this->prefix());
         TF_RETURN_IF_ERROR(this->dataset()->input_->MakeIterator(
             ctx, this->prefix(), &input_impl_));
       }
