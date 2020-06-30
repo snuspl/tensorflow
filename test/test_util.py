@@ -3,6 +3,7 @@ import os
 import glob
 import time
 from functools import reduce
+import imagenet_util
 
 def get_ckpt_dir():
     return os.environ["EPARALLAX_INDEX_CKPT_DIR"]
@@ -48,10 +49,10 @@ def run_steps(graph, n, num_steps, initializer=None, measure_time=True):
         return res
 
 def build_imagenet_input_pipeline(batch_size, num_workers, worker_id,
-                                  repeat=True, shuffle=True):
+                                  repeat=True, shuffle=True, preprocess=False):
     file_names = [
-            "/cmsdata/ssd1/cmslab/imagenet-data/aws/train-{:05d}-of-01024"
-            .format(i) for i in range(256, 256+4)
+        "/cmsdata/ssd1/cmslab/imagenet-data/train-{:05d}-of-01024".format(i)
+        for i in range(0, 4)
     ]
     file_names.sort()
     num_splits = 1
@@ -70,9 +71,10 @@ def build_imagenet_input_pipeline(batch_size, num_workers, worker_id,
         ds = ds.shuffle(buffer_size=50)
     if (repeat):
         ds = ds.repeat()
+    map_fn = imagenet_util.parse_and_preprocess if preprocess else lambda *x: x
     ds = ds.apply(
         tf.data.experimental.map_and_batch(
-            map_func=lambda *x:x,
+            map_func=map_fn,
             batch_size=batch_size_per_split,
             num_parallel_batches=num_splits))
     ds = ds.prefetch(buffer_size=num_splits)
