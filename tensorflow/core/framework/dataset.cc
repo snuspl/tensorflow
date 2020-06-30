@@ -507,7 +507,7 @@ void IndexManager::ResetIndex(string iterator_id) {
   }
 
   std::ofstream ckpt_file;
-  string ckpt_file_path = ckpt_dir_ + "/index_ckpt_" +
+  string ckpt_file_path = string(ckpt_dir_) + "/index_ckpt_" +
       std::to_string(shard_index_);
   ckpt_file.open(ckpt_file_path.data());
   if (ckpt_file.is_open()) {
