@@ -414,6 +414,7 @@ Status DatasetBase::DatasetGraphDefBuilder::AddInputDataset(
 
 void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
   //uint64 start = Env::Default()->NowMicros();
+  mutex_lock l(*mu_);
   bool all_processed;
   std::vector<EparallaxTensorIndex*> processed_indices_buffer;
   processed_indices_buffer.push_back(index);
@@ -424,7 +425,6 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
     processed_indices_buffer.pop_back();
 
     {
-      mutex_lock l(*processed_mu_);
       processed_indices_->Push(processed_index);
       RemoveChildren(processed_index);
 
@@ -433,8 +433,6 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
           processed_indices_buffer.push_back(parent_index);
         }
       } else {
-        mutex_lock l2(*infertile_mu_);
-        mutex_lock l3(*children_mu_);
         for (auto parent_index : *processed_index->parent_indices()) {
           if (infertile_indices_->Contains(parent_index) &&
               ChildrenAllProcessed(parent_index) &&
@@ -449,16 +447,16 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
 }
 
 void IndexManager::RecordInfertile(EparallaxTensorIndex* index) {
-  mutex_lock l(*infertile_mu_);
+  mutex_lock l(*mu_);
   infertile_indices_->Push(index);
 }
 
 EparallaxTensorIndex* IndexManager::IssueNewIndex(
     string prefix, std::vector<EparallaxTensorIndex*>* parent_indices) {
   //uint64 start = Env::Default()->NowMicros();
+  mutex_lock l(*mu_);
   EparallaxTensorIndex* out_index;
   {
-    mutex_lock l(*issued_mu_);
 
     int64 last_local_index = -1;
     for (auto issued_index : *issued_indices_->Get(
@@ -475,7 +473,6 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
   }
   //LOG(INFO) << prefix << " IssueNewIndex1 took " << Env::Default()->NowMicros() - start << " usecs.";
   //start = Env::Default()->NowMicros();
-  mutex_lock l(*children_mu_);
   for (auto parent_index : *out_index->parent_indices()) {
     auto it = children_indices_->find(parent_index->ToString());
     std::vector<EparallaxTensorIndex*>* q;
@@ -493,21 +490,19 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
 }
 
 bool IndexManager::AlreadyProcessed(EparallaxTensorIndex* index) {
-  mutex_lock l(*processed_mu_);
+  mutex_lock l(*mu_);
   return processed_indices_->Contains(index);
 }
 
 void IndexManager::ResetIndex(string iterator_id) {
+  mutex_lock l(*mu_);
   {
-    mutex_lock l(*processed_mu_);
     processed_indices_->Clear(iterator_id);
   }
   {
-    mutex_lock l(*issued_mu_);
     issued_indices_->Clear(iterator_id);
   }
   {
-    mutex_lock l(*infertile_mu_);
     infertile_indices_->Clear(iterator_id);
   }
 
@@ -526,8 +521,7 @@ void IndexManager::SetShardID(int64 index) {
 }
 
 bool IndexManager::IsFirstCall(string iterator_id) {
-  mutex_lock l(*processed_mu_);
-  mutex_lock l2(*issued_mu_);
+  mutex_lock l(*mu_);
   return issued_indices_->Empty(iterator_id) && processed_indices_->Empty();
 }
 

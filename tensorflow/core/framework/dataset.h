@@ -503,10 +503,7 @@ class MultiLevelIndexTree {
 class IndexManager {
  public:
   IndexManager() :
-      processed_mu_(std::make_shared<mutex>()),
-      issued_mu_(std::make_shared<mutex>()),
-      infertile_mu_(std::make_shared<mutex>()),
-      children_mu_(std::make_shared<mutex>()),
+      mu_(std::make_shared<mutex>()),
       processed_indices_(std::make_shared<MultiLevelIndexTree>()),
       issued_indices_(std::make_shared<MultiLevelIndexTree>()),
       infertile_indices_(std::make_shared<MultiLevelIndexTree>()),
@@ -551,7 +548,7 @@ class IndexManager {
 
  protected:
   void RemoveChildren(EparallaxTensorIndex* index) {
-    mutex_lock l(*children_mu_);
+    mutex_lock l(*mu_);
     auto it = children_indices_->find(index->ToString());
     if (it == children_indices_->end()) {
       return;
@@ -563,7 +560,7 @@ class IndexManager {
   }
 
   bool ChildrenAllProcessed(EparallaxTensorIndex* index)
-      EXCLUSIVE_LOCKS_REQUIRED(*children_mu_) {
+      EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
     //uint64 start = Env::Default()->NowMicros();
     auto it = children_indices_->find(index->ToString());
     std::vector<EparallaxTensorIndex*>* q;
@@ -586,6 +583,8 @@ class IndexManager {
   }
 
   void Restore() {
+    uint64 start = Env::Default()->NowMicros();
+    LOG(INFO) << "Restoring processed indices";
     string ckpt_file_path = ckpt_dir_ + "/index_ckpt";
     std::ifstream ckpt_file(ckpt_file_path.data());
     if (ckpt_file.is_open()) {
@@ -621,6 +620,8 @@ class IndexManager {
       }
       ckpt_file.close();
     }
+    uint64 end = Env::Default()->NowMicros();
+    LOG(INFO) << "Restore took " << (end - start) << " usecs.";
   }
 
   void SaveInternal() {
@@ -716,17 +717,14 @@ class IndexManager {
   }
 
  private:
-  std::shared_ptr<mutex> processed_mu_;
+  std::shared_ptr<mutex> mu_;
   std::shared_ptr<MultiLevelIndexTree> processed_indices_
-      GUARDED_BY(*processed_mu_);
-  std::shared_ptr<mutex> issued_mu_;
-  std::shared_ptr<MultiLevelIndexTree> issued_indices_ GUARDED_BY(*issued_mu_);
-  std::shared_ptr<mutex> infertile_mu_;
+      GUARDED_BY(*mu_);
+  std::shared_ptr<MultiLevelIndexTree> issued_indices_ GUARDED_BY(*mu_);
   std::shared_ptr<MultiLevelIndexTree> infertile_indices_
-      GUARDED_BY(*infertile_mu_);
-  std::shared_ptr<mutex> children_mu_;
+      GUARDED_BY(*mu_);
   std::shared_ptr<std::map<string, std::vector<EparallaxTensorIndex*>*>>
-      children_indices_ GUARDED_BY(*children_mu_);
+      children_indices_ GUARDED_BY(*mu_);
   int64 shard_index_;
   string ckpt_dir_;
 };
