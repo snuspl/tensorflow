@@ -535,6 +535,7 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
               << "Tried to start inputs, despite already producing!";
           input = std::move(input_arguments);
           index = idx;
+          index->productive = true;
           is_producing = true;
           cond_var.notify_one();
         } else {
@@ -790,6 +791,7 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
                 workers_[thread_index].outputs.back().output.swap(
                     worker_thread_states_[thread_index].output_elem.output);
                 workers_[thread_index].index->productive = true;
+                workers_[thread_index].index->num_pending_children++;
               }
               worker_thread_states_[thread_index].output_elem.status =
                   Status::OK();

@@ -580,6 +580,7 @@ class ParallelInterleaveDatasetOp::Dataset : public DatasetBase {
           break;
         } else {
           element->index->productive = true;
+          element->index->num_pending_children++;
         }
         RecordBufferEnqueue(ctx.get(), result->return_values);
         mutex_lock l(*mu_);

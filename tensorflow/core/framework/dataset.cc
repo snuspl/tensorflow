@@ -425,7 +425,7 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
     processed_indices.pop_back();
 
     for (auto parent_index : *processed_index->parent_indices()) {
-      if (!parent_index->productive && ChildrenAllProcessed(parent_index)) {
+      if (parent_index->NotNeededAnymore()) {
         parent_index->processed = true;
         processed_indices.push_back(parent_index);
       }
@@ -450,15 +450,8 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
   }
 
   for (auto parent_index : *out_index->parent_indices()) {
-    auto it = children_indices_->find(parent_index->ToString());
-    std::vector<EparallaxTensorIndex*>* q;
-    if (it == children_indices_->end()) {
-      q = new std::vector<EparallaxTensorIndex*>;
-      children_indices_->insert(std::make_pair(parent_index->ToString(), q));
-    } else {
-      q = it->second;
-    }
-    q->push_back(out_index);
+    parent_index->child_indices()->push_back(out_index);
+    parent_index->num_pending_children--;
   }
 
   return out_index;

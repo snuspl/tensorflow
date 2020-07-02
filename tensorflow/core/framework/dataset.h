@@ -68,6 +68,7 @@ class EparallaxTensorIndex {
                        int64 local_index) {
     iterator_id_ = iterator_id;
     parent_indices_ = parent_indices;
+    child_indices_ = new std::vector<EparallaxTensorIndex*>;
     local_index_ = local_index;
   }
 
@@ -78,12 +79,46 @@ class EparallaxTensorIndex {
     delete parent_indices_;
   }
 
+  bool NotNeededAnymore() {
+    return !productive && AllChildrenProcessed();
+  }
+
   string ToString() const {
     return op_type() + "(" + tensorflow::ToString(*parent_indices()) + ", " +
         std::to_string(local_index()) + ")";
   }
 
   string iterator_id() const { return iterator_id_; }
+
+  std::vector<EparallaxTensorIndex*>* parent_indices() const {
+    return parent_indices_;
+  }
+
+  std::vector<EparallaxTensorIndex*>* child_indices() const {
+    return child_indices_;
+  }
+
+  int64 local_index() const { return local_index_; }
+
+  friend bool operator==(const EparallaxTensorIndex& index_1,
+                         const EparallaxTensorIndex& index_2);
+  friend bool operator!=(const EparallaxTensorIndex& index_1,
+                         const EparallaxTensorIndex& index_2);
+
+  bool productive = false;
+  bool processed = false;
+  int64 num_pending_children = 0;
+
+ protected:
+  bool AllChildrenProcessed() {
+    if (num_pending_children > 0) {
+      return false;
+    }
+    for (auto index : *child_indices_) {
+      if (!index->processed) return false;
+    }
+    return true;
+  }
 
   string op_type() const {
     size_t pos = iterator_id_.find_last_of("::");
@@ -108,23 +143,10 @@ class EparallaxTensorIndex {
     return iterator_id_.substr(pos+1, iterator_id_.length()-pos-1);
   }
 
-  std::vector<EparallaxTensorIndex*>* parent_indices() const {
-    return parent_indices_;
-  }
-
-  int64 local_index() const { return local_index_; }
-
-  friend bool operator==(const EparallaxTensorIndex& index_1,
-                         const EparallaxTensorIndex& index_2);
-  friend bool operator!=(const EparallaxTensorIndex& index_1,
-                         const EparallaxTensorIndex& index_2);
-
-  bool productive = false;
-  bool processed = false;
-
  private:
   string iterator_id_;
   std::vector<EparallaxTensorIndex*>* parent_indices_;
+  std::vector<EparallaxTensorIndex*>* child_indices_;
   int64 local_index_;
 };
 
@@ -518,8 +540,6 @@ class IndexManager {
   IndexManager() :
       mu_(std::make_shared<mutex>()),
       index_tree_(std::make_shared<IndexTree>()),
-      children_indices_(std::make_shared<
-          std::map<string, std::vector<EparallaxTensorIndex*>*>>()),
       shard_index_(0) {
     ckpt_dir_ = std::getenv("EPARALLAX_INDEX_CKPT_DIR");
     if (ckpt_dir_ == nullptr) {
@@ -559,23 +579,6 @@ class IndexManager {
   }
 
  protected:
-  bool ChildrenAllProcessed(EparallaxTensorIndex* index)
-      EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
-    auto it = children_indices_->find(index->ToString());
-    std::vector<EparallaxTensorIndex*>* children_indices;
-    if (it == children_indices_->end()) {
-      children_indices = new std::vector<EparallaxTensorIndex*>;
-      children_indices_->insert(
-          std::make_pair(index->ToString(), children_indices));
-    } else {
-      children_indices = it->second;
-    }
-    for (auto index : *children_indices) {
-      if (!index->processed) return false;
-    }
-    return true;
-  }
-
   void Restore() {
     uint64 start = Env::Default()->NowMicros();
     LOG(INFO) << "Restoring processed indices";
@@ -714,8 +717,6 @@ class IndexManager {
  private:
   std::shared_ptr<mutex> mu_;
   std::shared_ptr<IndexTree> index_tree_ GUARDED_BY(*mu_);
-  std::shared_ptr<std::map<string, std::vector<EparallaxTensorIndex*>*>>
-      children_indices_ GUARDED_BY(*mu_);
   int64 shard_index_;
   char* ckpt_dir_;
 };
