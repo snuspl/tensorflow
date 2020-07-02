@@ -151,7 +151,6 @@ class InterleaveDatasetOp::Dataset : public DatasetBase {
           EparallaxTensorIndex* index;
           TF_RETURN_IF_ERROR(current_elements_[cycle_index_].iterator->GetNext(
                 ctx, out_tensors, &end_of_element, index));
-          //parent_indices->push_back(current_elements_[cycle_index_].index);
           parent_indices->push_back(index);
           if (!end_of_element) {
             // Produce the subelement as output.

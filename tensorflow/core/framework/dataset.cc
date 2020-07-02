@@ -426,25 +426,15 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
     processed_indices_->Push(processed_index);
     RemoveChildren(processed_index);
 
-    if (!IsOneToManyOp(processed_index->iterator_id())) {
-      for (auto parent_index : *processed_index->parent_indices()) {
+    auto parent_indices = processed_index->parent_indices();
+    for (auto parent_index : *parent_indices) {
+      if (!parent_index->productive &&
+          ChildrenAllProcessed(parent_index) &&
+          !processed_indices_->Contains(parent_index)) {
         processed_indices_buffer.push_back(parent_index);
-      }
-    } else {
-      for (auto parent_index : *processed_index->parent_indices()) {
-        if (infertile_indices_->Contains(parent_index) &&
-            ChildrenAllProcessed(parent_index) &&
-            !processed_indices_->Contains(parent_index)) {
-          processed_indices_buffer.push_back(parent_index);
-        }
       }
     }
   }
-}
-
-void IndexManager::RecordInfertile(EparallaxTensorIndex* index) {
-  mutex_lock l(*mu_);
-  infertile_indices_->Push(index);
 }
 
 EparallaxTensorIndex* IndexManager::IssueNewIndex(
@@ -487,7 +477,6 @@ void IndexManager::ResetIndex(string iterator_id) {
   mutex_lock l(*mu_);
   processed_indices_->Clear(iterator_id);
   issued_indices_->Clear(iterator_id);
-  infertile_indices_->Clear(iterator_id);
 
   std::ofstream ckpt_file;
   string ckpt_file_path = string(ckpt_dir_) + "/index_ckpt_" +

@@ -135,13 +135,14 @@ class FlatMapDatasetOp::Dataset : public DatasetBase {
               current_element_iterator_, ctx, out_tensors, &end_of_element));
           if (!end_of_element) {
             // Produce the subelement as output.
+            current_element_index_->productive = true;
             *end_of_sequence = false;
             return Status::OK();
           }
 
           // We have reached the end of the current element, so maybe move on
           // to the next element.
-          ctx->index_manager()->RecordInfertile(current_element_index_);
+          current_element_index_->productive = false;
           current_element_iterator_.reset();
           current_element_index_ = nullptr;
         }

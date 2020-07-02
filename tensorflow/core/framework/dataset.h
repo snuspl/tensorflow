@@ -84,6 +84,7 @@ class EparallaxTensorIndex {
   }
 
   string iterator_id() const { return iterator_id_; }
+
   string op_type() const {
     size_t pos = iterator_id_.find_last_of("::");
     if (iterator_id_.substr(pos-2, 1) != "]") {
@@ -106,10 +107,14 @@ class EparallaxTensorIndex {
     pos = iterator_id_.substr(0, pos).find_last_of("::");
     return iterator_id_.substr(pos+1, iterator_id_.length()-pos-1);
   }
+
   std::vector<EparallaxTensorIndex*>* parent_indices() const {
     return parent_indices_;
   }
+
   int64 local_index() const { return local_index_; }
+
+  bool productive = false;
 
   friend bool operator==(const EparallaxTensorIndex& index_1,
                          const EparallaxTensorIndex& index_2);
@@ -507,7 +512,6 @@ class IndexManager {
       mu_(std::make_shared<mutex>()),
       processed_indices_(std::make_shared<MultiLevelIndexTree>()),
       issued_indices_(std::make_shared<MultiLevelIndexTree>()),
-      infertile_indices_(std::make_shared<MultiLevelIndexTree>()),
       children_indices_(std::make_shared<
           std::map<string, std::vector<EparallaxTensorIndex*>*>>()),
       shard_index_(0) {
@@ -733,8 +737,6 @@ class IndexManager {
   std::shared_ptr<MultiLevelIndexTree> processed_indices_
       GUARDED_BY(*mu_);
   std::shared_ptr<MultiLevelIndexTree> issued_indices_ GUARDED_BY(*mu_);
-  std::shared_ptr<MultiLevelIndexTree> infertile_indices_
-      GUARDED_BY(*mu_);
   std::shared_ptr<std::map<string, std::vector<EparallaxTensorIndex*>*>>
       children_indices_ GUARDED_BY(*mu_);
   int64 shard_index_;

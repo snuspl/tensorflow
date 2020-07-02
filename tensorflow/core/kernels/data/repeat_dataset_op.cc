@@ -155,11 +155,11 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
       while (i_ < dataset()->count_) {
         TF_RETURN_IF_ERROR(
             input_impl_->GetNext(ctx, out_tensors, end_of_sequence, index));
-
+        index->productive = true;
         if (!*end_of_sequence) {
           parent_indices->push_back(index);
           if (i_ == dataset()->count_ - 1) {
-            ctx->index_manager()->RecordInfertile(index);
+            index->productive = false;
           }
           return Status::OK();
         }
@@ -231,8 +231,12 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
           TF_RETURN_IF_ERROR(
               dataset()->input_->MakeIterator(ctx, prefix(), &input_impl_));
         }
-        Status s = this->GetNextFromInput(
-            input_impl_, ctx, out_tensors, end_of_sequence, parent_indices);
+
+        EparallaxTensorIndex* index;
+        Status s = input_impl_->GetNext(
+            ctx, out_tensors, end_of_sequence, index);
+        index->productive = true;
+
         DCHECK(!*end_of_sequence || out_tensors->empty());
         if (first_call_ && *end_of_sequence) {
           // If the first call to GetNext() fails because the end
@@ -244,11 +248,11 @@ class RepeatDatasetOp::Dataset : public DatasetBase {
         }
         first_call_ = false;
         if (!*end_of_sequence) {
+          parent_indices->push_back(index);
           return s;
         } else {
           ctx->index_manager()->ResetIndex(prefix());
           input_impl_.reset();
-          first_call_ = ctx->index_manager()->IsFirstCall(prefix());
         }
       } while (true);
     }
