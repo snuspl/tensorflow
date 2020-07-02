@@ -413,7 +413,6 @@ Status DatasetBase::DatasetGraphDefBuilder::AddInputDataset(
 }
 
 void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
-  //uint64 start = Env::Default()->NowMicros();
   mutex_lock l(*mu_);
   bool all_processed;
   std::vector<EparallaxTensorIndex*> processed_indices_buffer;
@@ -424,26 +423,23 @@ void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
     EparallaxTensorIndex* processed_index = processed_indices_buffer.back();
     processed_indices_buffer.pop_back();
 
-    {
-      processed_indices_->Push(processed_index);
-      RemoveChildren(processed_index);
+    processed_indices_->Push(processed_index);
+    RemoveChildren(processed_index);
 
-      if (!IsOneToManyOp(processed_index->iterator_id())) {
-        for (auto parent_index : *processed_index->parent_indices()) {
+    if (!IsOneToManyOp(processed_index->iterator_id())) {
+      for (auto parent_index : *processed_index->parent_indices()) {
+        processed_indices_buffer.push_back(parent_index);
+      }
+    } else {
+      for (auto parent_index : *processed_index->parent_indices()) {
+        if (infertile_indices_->Contains(parent_index) &&
+            ChildrenAllProcessed(parent_index) &&
+            !processed_indices_->Contains(parent_index)) {
           processed_indices_buffer.push_back(parent_index);
-        }
-      } else {
-        for (auto parent_index : *processed_index->parent_indices()) {
-          if (infertile_indices_->Contains(parent_index) &&
-              ChildrenAllProcessed(parent_index) &&
-              !processed_indices_->Contains(parent_index)) {
-            processed_indices_buffer.push_back(parent_index);
-          }
         }
       }
     }
   }
-  //LOG(INFO) << "RecordFinished took " << Env::Default()->NowMicros() - start << " usecs.";
 }
 
 void IndexManager::RecordInfertile(EparallaxTensorIndex* index) {
@@ -453,26 +449,20 @@ void IndexManager::RecordInfertile(EparallaxTensorIndex* index) {
 
 EparallaxTensorIndex* IndexManager::IssueNewIndex(
     string prefix, std::vector<EparallaxTensorIndex*>* parent_indices) {
-  //uint64 start = Env::Default()->NowMicros();
   mutex_lock l(*mu_);
   EparallaxTensorIndex* out_index;
-  {
-
-    int64 last_local_index = -1;
-    for (auto issued_index : *issued_indices_->Get(
-          prefix, ToString(*parent_indices))) {
-      if (*issued_index->parent_indices() == *parent_indices &&
-          issued_index->local_index() > last_local_index) {
-        last_local_index = issued_index->local_index();
-      }
+  int64 last_local_index = -1;
+  for (auto issued_index : *issued_indices_->Get(
+        prefix, ToString(*parent_indices))) {
+    if (*issued_index->parent_indices() == *parent_indices &&
+        issued_index->local_index() > last_local_index) {
+      last_local_index = issued_index->local_index();
     }
-    out_index = new EparallaxTensorIndex(prefix, parent_indices,
-                                         last_local_index + 1);
-
-    issued_indices_->Push(out_index);
   }
-  //LOG(INFO) << prefix << " IssueNewIndex1 took " << Env::Default()->NowMicros() - start << " usecs.";
-  //start = Env::Default()->NowMicros();
+  out_index = new EparallaxTensorIndex(prefix, parent_indices,
+                                       last_local_index + 1);
+  issued_indices_->Push(out_index);
+
   for (auto parent_index : *out_index->parent_indices()) {
     auto it = children_indices_->find(parent_index->ToString());
     std::vector<EparallaxTensorIndex*>* q;
@@ -485,7 +475,6 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
     q->push_back(out_index);
   }
 
-  //LOG(INFO) << prefix << " IssueNewIndex2 took " << Env::Default()->NowMicros() - start << " usecs.";
   return out_index;
 }
 
@@ -496,15 +485,9 @@ bool IndexManager::AlreadyProcessed(EparallaxTensorIndex* index) {
 
 void IndexManager::ResetIndex(string iterator_id) {
   mutex_lock l(*mu_);
-  {
-    processed_indices_->Clear(iterator_id);
-  }
-  {
-    issued_indices_->Clear(iterator_id);
-  }
-  {
-    infertile_indices_->Clear(iterator_id);
-  }
+  processed_indices_->Clear(iterator_id);
+  issued_indices_->Clear(iterator_id);
+  infertile_indices_->Clear(iterator_id);
 
   std::ofstream ckpt_file;
   string ckpt_file_path = string(ckpt_dir_) + "/index_ckpt_" +

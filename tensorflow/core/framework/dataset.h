@@ -524,6 +524,9 @@ class IndexManager {
             ("/tmp/tfeip_" + std::to_string(++i)).c_str());
         status = mkdir(ckpt_dir_, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
       }
+      LOG(WARNING) << "Environment variable EPARALLAX_INDEX_CKPT_DIR is not "
+                   << "specified. Index checkpoints will be stored in "
+                   << ckpt_dir_;
     }
     Restore();
   }
@@ -546,13 +549,11 @@ class IndexManager {
   bool IsFirstCall(string iterator_id);
 
   bool IsOneToManyOp(string iterator_id) {
-    //uint64 start = Env::Default()->NowMicros();
     size_t pos = iterator_id.find_last_of("::");
     string op_name = iterator_id.substr(pos+1, iterator_id.length()-pos-1);
     bool ret = op_name == "FlatMap" || op_name == "Interleave" ||
         op_name == "ParallelInterleaveV2" || op_name == "ParallelInterleave" ||
         op_name == "FiniteRepeat" || op_name == "ForeverRepeat";
-    //LOG(INFO) << "IsOneToManyOp took " << Env::Default()->NowMicros() - start << " usecs.";
     return ret;
   }
 
@@ -575,7 +576,6 @@ class IndexManager {
 
   bool ChildrenAllProcessed(EparallaxTensorIndex* index)
       EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
-    //uint64 start = Env::Default()->NowMicros();
     auto it = children_indices_->find(index->ToString());
     std::vector<EparallaxTensorIndex*>* q;
     if (it == children_indices_->end()) {
@@ -588,11 +588,9 @@ class IndexManager {
       if (processed_indices_->Contains(*it)) {
         q->erase(it);
       } else {
-        //LOG(INFO) << "ChildrenAllProcessed took " << Env::Default()->NowMicros() - start << " usecs.";
         return false;
       }
     }
-    //LOG(INFO) << "ChildrenAllProcessed took " << Env::Default()->NowMicros() - start << " usecs.";
     return true;
   }
 
