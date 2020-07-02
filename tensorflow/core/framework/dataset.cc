@@ -415,23 +415,19 @@ Status DatasetBase::DatasetGraphDefBuilder::AddInputDataset(
 void IndexManager::RecordFinished(EparallaxTensorIndex* index) {
   mutex_lock l(*mu_);
   bool all_processed;
-  std::vector<EparallaxTensorIndex*> processed_indices_buffer;
-  processed_indices_buffer.push_back(index);
+  std::vector<EparallaxTensorIndex*> processed_indices;
+  index->processed = true;
+  processed_indices.push_back(index);
 
-  while (!processed_indices_buffer.empty()) {
+  while (!processed_indices.empty()) {
     all_processed = true;
-    EparallaxTensorIndex* processed_index = processed_indices_buffer.back();
-    processed_indices_buffer.pop_back();
+    EparallaxTensorIndex* processed_index = processed_indices.back();
+    processed_indices.pop_back();
 
-    processed_indices_->Push(processed_index);
-    RemoveChildren(processed_index);
-
-    auto parent_indices = processed_index->parent_indices();
-    for (auto parent_index : *parent_indices) {
-      if (!parent_index->productive &&
-          ChildrenAllProcessed(parent_index) &&
-          !processed_indices_->Contains(parent_index)) {
-        processed_indices_buffer.push_back(parent_index);
+    for (auto parent_index : *processed_index->parent_indices()) {
+      if (!parent_index->productive && ChildrenAllProcessed(parent_index)) {
+        parent_index->processed = true;
+        processed_indices.push_back(parent_index);
       }
     }
   }
@@ -441,17 +437,17 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
     string prefix, std::vector<EparallaxTensorIndex*>* parent_indices) {
   mutex_lock l(*mu_);
   EparallaxTensorIndex* out_index;
-  int64 last_local_index = -1;
-  for (auto issued_index : *issued_indices_->Get(
-        prefix, ToString(*parent_indices))) {
-    if (*issued_index->parent_indices() == *parent_indices &&
-        issued_index->local_index() > last_local_index) {
-      last_local_index = issued_index->local_index();
-    }
+  string parent_indices_string = ToString(*parent_indices);
+  int64 local_index = index_tree_->GetNextLocalIndex(prefix,
+                                                     parent_indices_string);
+  out_index = index_tree_->Get(prefix, parent_indices_string, local_index);
+
+  if (out_index == nullptr) {
+    out_index = new EparallaxTensorIndex(prefix, parent_indices, local_index);
+    index_tree_->Push(out_index);
+  } else {
+    CHECK(out_index->processed);
   }
-  out_index = new EparallaxTensorIndex(prefix, parent_indices,
-                                       last_local_index + 1);
-  issued_indices_->Push(out_index);
 
   for (auto parent_index : *out_index->parent_indices()) {
     auto it = children_indices_->find(parent_index->ToString());
@@ -468,15 +464,9 @@ EparallaxTensorIndex* IndexManager::IssueNewIndex(
   return out_index;
 }
 
-bool IndexManager::AlreadyProcessed(EparallaxTensorIndex* index) {
-  mutex_lock l(*mu_);
-  return processed_indices_->Contains(index);
-}
-
 void IndexManager::ResetIndex(string iterator_id) {
   mutex_lock l(*mu_);
-  processed_indices_->Clear(iterator_id);
-  issued_indices_->Clear(iterator_id);
+  index_tree_->Clear(iterator_id);
 
   std::ofstream ckpt_file;
   string ckpt_file_path = string(ckpt_dir_) + "/index_ckpt_" +
@@ -494,7 +484,10 @@ void IndexManager::SetShardID(int64 index) {
 
 bool IndexManager::IsFirstCall(string iterator_id) {
   mutex_lock l(*mu_);
-  return issued_indices_->Empty(iterator_id) && processed_indices_->Empty();
+  for (auto index : index_tree_->GetAll()) {
+    if (index->processed) return false;
+  }
+  return true;
 }
 
 Status DatasetBaseIterator::GetNextFromInput(
@@ -526,7 +519,7 @@ Status DatasetBaseIterator::GetNext(IteratorContext* ctx,
   if (!s.ok() || *end_of_sequence || out_tensors->empty()) {
     return s;
   }
-  if (ctx->index_manager()->AlreadyProcessed(out_index)) {
+  if (out_index->processed) {
     out_tensors->clear();
     return s;
   }
