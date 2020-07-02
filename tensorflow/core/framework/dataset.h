@@ -561,8 +561,8 @@ class IndexManager {
   }
 
  protected:
-  void RemoveChildren(EparallaxTensorIndex* index) {
-    mutex_lock l(*mu_);
+  void RemoveChildren(EparallaxTensorIndex* index)
+      EXCLUSIVE_LOCKS_REQUIRED(*mu_) {
     auto it = children_indices_->find(index->ToString());
     if (it == children_indices_->end()) {
       return;
