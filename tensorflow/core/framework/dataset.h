@@ -539,29 +539,7 @@ class IndexManager {
  public:
   IndexManager() :
       mu_(std::make_shared<mutex>()),
-      index_tree_(std::make_shared<IndexTree>()),
-      shard_index_(0) {
-    ckpt_dir_ = std::getenv("EPARALLAX_INDEX_CKPT_DIR");
-    if (ckpt_dir_ == nullptr) {
-      // Make an arbitrary tmp directory to save index
-      int status;
-      int i = 0;
-      ckpt_dir_ = const_cast<char*>(
-          ("/tmp/tfeip_" + std::to_string(i)).c_str());
-      status = mkdir(ckpt_dir_, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-      while (status != 0) {
-        ckpt_dir_ = const_cast<char*>(
-            ("/tmp/tfeip_" + std::to_string(++i)).c_str());
-        status = mkdir(ckpt_dir_, S_IRWXU | S_IRWXG | S_IROTH | S_IXOTH);
-      }
-      LOG(WARNING) << "Environment variable EPARALLAX_INDEX_CKPT_DIR is not "
-                   << "specified. Index checkpoints will be stored in "
-                   << ckpt_dir_;
-    }
-    Restore();
-  }
-
-  ~IndexManager() { SaveInternal(); }
+      index_tree_(std::make_shared<IndexTree>()) {}
 
   EparallaxTensorIndex* IssueNewIndex(
       string prefix, std::vector<EparallaxTensorIndex*>* parent_indices);
@@ -570,20 +548,21 @@ class IndexManager {
 
   void ResetIndex(string iterator_id);
 
-  void SetShardID(int64 index);
-
   bool IsFirstCall(string iterator_id);
 
-  void Save() {
-    SaveInternal();
+  void Restore(const string ckpt_path) {
+    RestoreInternal(ckpt_path);
+  }
+
+  void Save(const string ckpt_path) {
+    SaveInternal(ckpt_path);
   }
 
  protected:
-  void Restore() {
+  void RestoreInternal(const string ckpt_path) {
     uint64 start = Env::Default()->NowMicros();
     LOG(INFO) << "Restoring processed indices";
-    string ckpt_file_path = string(ckpt_dir_) + "/index_ckpt";
-    std::ifstream ckpt_file(ckpt_file_path.data());
+    std::ifstream ckpt_file(ckpt_path.data());
     if (ckpt_file.is_open()) {
       string line;
       std::vector<EparallaxTensorIndex*> buf;
@@ -621,11 +600,9 @@ class IndexManager {
     LOG(INFO) << "Restore took " << (end - start) << " usecs.";
   }
 
-  void SaveInternal() {
+  void SaveInternal(const string ckpt_path) {
     std::ofstream ckpt_file;
-    string ckpt_file_path = string(ckpt_dir_) + "/index_ckpt_" +
-        std::to_string(shard_index_);
-    ckpt_file.open(ckpt_file_path.data());
+    ckpt_file.open(ckpt_path.data());
     if (ckpt_file.is_open()) {
       for (auto index : index_tree_->GetAll()) {
         if (index->processed) {
@@ -717,8 +694,6 @@ class IndexManager {
  private:
   std::shared_ptr<mutex> mu_;
   std::shared_ptr<IndexTree> index_tree_ GUARDED_BY(*mu_);
-  int64 shard_index_;
-  char* ckpt_dir_;
 };
 
 // A utility class for running a function and ensuring that there is always a

@@ -63,16 +63,14 @@ class IteratorResource : public ResourceBase {
     return output_shapes_;
   }
 
-  bool ShouldStop() {
-    mutex_lock l(should_stop_mu_);
-    return should_stop_;
+  void RestoreIndex(const string ckpt_path) {
+    mutex_lock l(mu_);
+    index_manager_->Restore(ckpt_path);
   }
 
-  void SaveIndex() {
-    mutex_lock l(should_stop_mu_);
-    mutex_lock l2(mu_);
-    index_manager_->Save();
-    should_stop_ = true;
+  void SaveIndex(const string ckpt_path) {
+    tf_shared_lock l(mu_);
+    index_manager_->Save(ckpt_path);
   }
 
  private:
@@ -188,9 +186,18 @@ class MakeIteratorOp : public AsyncOpKernel {
   BackgroundWorker background_worker_;
 };
 
-class IteratorStopOp : public OpKernel {
+class IteratorRestoreCheckpointOp : public OpKernel {
  public:
-  explicit IteratorStopOp(OpKernelConstruction* ctx) : OpKernel(ctx) {}
+  explicit IteratorRestoreCheckpointOp(OpKernelConstruction* ctx) :
+      OpKernel(ctx) {}
+
+  void Compute(OpKernelContext* ctx) override;
+};
+
+class IteratorSaveCheckpointOp : public OpKernel {
+ public:
+  explicit IteratorSaveCheckpointOp(OpKernelConstruction* ctx) :
+      OpKernel(ctx) {}
 
   void Compute(OpKernelContext* ctx) override;
 };

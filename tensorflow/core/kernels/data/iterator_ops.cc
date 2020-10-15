@@ -99,6 +99,7 @@ Status IteratorResource::GetNext(OpKernelContext* ctx,
       if (first_) {
         LOG(INFO) << "First run took " << ctx->env()->NowMicros() - start << " usecs";
       }
+      mutex_lock l(mu_);
       index_manager_->RecordFinished(out_index);
     }
     first_ = false;
@@ -910,10 +911,21 @@ class OneShotIteratorOp : public AsyncOpKernel {
 
 }  // namespace
 
-void IteratorStopOp::Compute(OpKernelContext* ctx) {
+void IteratorRestoreCheckpointOp::Compute(OpKernelContext* ctx) {
   IteratorResource* iterator;
   OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &iterator));
-  iterator->SaveIndex();
+  const string ckpt_path = ctx->input(1).flat<string>()(0);
+  iterator->RestoreIndex(ckpt_path);
+  Tensor* output_tensor = nullptr;
+  OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &output_tensor));
+  output_tensor->scalar<bool>()() = true;
+}
+
+void IteratorSaveCheckpointOp::Compute(OpKernelContext* ctx) {
+  IteratorResource* iterator;
+  OP_REQUIRES_OK(ctx, LookupResource(ctx, HandleFromInput(ctx, 0), &iterator));
+  const string ckpt_path = ctx->input(1).flat<string>()(0);
+  iterator->SaveIndex(ckpt_path);
   Tensor* output_tensor = nullptr;
   OP_REQUIRES_OK(ctx, ctx->allocate_output(0, TensorShape({}), &output_tensor));
   output_tensor->scalar<bool>()() = true;
@@ -928,11 +940,6 @@ void IteratorGetNextOp::ComputeAsync(OpKernelContext* ctx, DoneCallback done) {
   // owned thread pool.
   background_worker_.Schedule(std::bind(
       [ctx, iterator](DoneCallback done) {
-        if (iterator->ShouldStop()) {
-          while(true) {
-            std::this_thread::sleep_for(std::chrono::seconds(60));
-          }
-        }
         std::vector<Tensor> components;
         bool end_of_sequence = false;
 
@@ -1175,8 +1182,10 @@ REGISTER_KERNEL_BUILDER(Name("ReduceDataset").Device(DEVICE_CPU),
                         ReduceDatasetOp);
 REGISTER_KERNEL_BUILDER(Name("OneShotIterator").Device(DEVICE_CPU),
                         OneShotIteratorOp);
-REGISTER_KERNEL_BUILDER(Name("IteratorStop").Device(DEVICE_CPU),
-                        IteratorStopOp);
+REGISTER_KERNEL_BUILDER(Name("IteratorRestoreCheckpoint").Device(DEVICE_CPU),
+                        IteratorRestoreCheckpointOp);
+REGISTER_KERNEL_BUILDER(Name("IteratorSaveCheckpoint").Device(DEVICE_CPU),
+                        IteratorSaveCheckpointOp);
 REGISTER_KERNEL_BUILDER(Name("IteratorGetNext").Device(DEVICE_CPU).Priority(2),
                         IteratorGetNextOp);
 REGISTER_KERNEL_BUILDER(Name("IteratorGetNext").Device(DEVICE_GPU).Priority(1),

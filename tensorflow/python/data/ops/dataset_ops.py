@@ -315,7 +315,7 @@ class DatasetV2(tracking_base.Trackable, composite_tensor.CompositeTensor):
           options.experimental_stats.counter_prefix)
     return dataset
 
-  def __iter__(self):
+  def iterator(self):
     """Creates an `Iterator` for enumerating the elements of this dataset.
 
     The returned iterator implements the Python iterator protocol and therefore
@@ -333,6 +333,9 @@ class DatasetV2(tracking_base.Trackable, composite_tensor.CompositeTensor):
     else:
       raise RuntimeError("__iter__() is only supported inside of tf.function "
                          "or when eager execution is enabled.")
+
+  def __iter__(self):
+    return self.iterator()
 
   @abc.abstractproperty
   def element_spec(self):

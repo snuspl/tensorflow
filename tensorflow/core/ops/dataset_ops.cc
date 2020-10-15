@@ -629,8 +629,18 @@ Status IteratorGetNextShapeFn(shape_inference::InferenceContext* c) {
 
 }  // namespace
 
-REGISTER_OP("IteratorStop")
+REGISTER_OP("IteratorRestoreCheckpoint")
     .Input("iterator: resource")
+    .Input("ckpt_path: string")
+    .Output("result: bool")
+    .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
+      c->set_output(0, c->Scalar());
+      return Status::OK();
+    });
+
+REGISTER_OP("IteratorSaveCheckpoint")
+    .Input("iterator: resource")
+    .Input("ckpt_path: string")
     .Output("result: bool")
     .SetShapeFn([](::tensorflow::shape_inference::InferenceContext* c) {
       c->set_output(0, c->Scalar());

@@ -5,12 +5,14 @@ import time
 from functools import reduce
 import imagenet_util
 
-def get_ckpt_dir():
-    return os.environ["EPARALLAX_INDEX_CKPT_DIR"]
+
+CHECKPOINT_PATH = '/tmp/tf-elastic-input-pipeline-test/idx_ckpt'
+if not os.path.exists(os.path.dirname(CHECKPOINT_PATH)):
+    os.makedirs(os.path.dirname(CHECKPOINT_PATH))
 
 def do_initialize_ckpt():
-    for f in glob.glob(get_ckpt_dir() + "/*"):
-        os.remove(f)
+    if os.path.exists(CHECKPOINT_PATH):
+        os.remove(CHECKPOINT_PATH)
 
 def initialize_ckpt(fn):
     def wrapper(*args, **kwargs):
@@ -18,34 +20,56 @@ def initialize_ckpt(fn):
         return fn(*args, **kwargs)
     return wrapper
 
-def aggregate_ckpt(fn):
-    def wrapper(*args, **kwargs):
-        ret = fn(*args, **kwargs)
-        with open(get_ckpt_dir() + "/index_ckpt", 'a') as global_ckpt:
-            for f in glob.glob(get_ckpt_dir() + "/index_ckpt_*"):
-                with open(f, 'r') as shard_ckpt:
-                    global_ckpt.write(shard_ckpt.read())
-                os.remove(f)
-        return ret
-    return wrapper
+def aggregate_ckpt(local_ckpt_paths, global_ckpt_path):
+    with open(global_ckpt_path, 'w') as global_ckpt:
+        for ckpt_path in local_ckpt_paths:
+            with open(ckpt_path, 'r') as local_ckpt:
+                global_ckpt.write(local_ckpt.read())
+            os.remove(ckpt_path)
 
 def flatten(res):
     return reduce(lambda x,y:x+y,
             [r[0].tolist() for r in reduce(lambda x,y:x+y, res)])
 
-@aggregate_ckpt
-def run_steps(graph, n, num_steps, initializer=None, measure_time=True):
+def run_steps(graph, iterators, num_steps, initializer=None, measure_time=True):
     start = None
+
+    flatten = False
+    if not isinstance(iterators, list):
+        iterators = [iterators]
+        flatten = True
+
+    global_ckpt_path = CHECKPOINT_PATH
+    local_ckpt_paths = [CHECKPOINT_PATH + f'_{i}' for i, _ in enumerate(iterators)]
+
+    with graph.as_default():
+        get_next_ops = [iterator.get_next() for iterator in iterators]
+        restore_checkpoint_ops = [
+            iterator.restore_checkpoint(global_ckpt_path)
+            for iterator in iterators
+        ]
+        save_checkpoint_ops = [
+            iterator.save_checkpoint(ckpt_path)
+            for iterator, ckpt_path in zip(iterators, local_ckpt_paths)
+        ]
+
     if measure_time:
         start = time.time()
     with tf.compat.v1.Session(graph=graph) as sess:
         if initializer is not None:
             sess.run(initializer)
+        sess.run(restore_checkpoint_ops)
         res = []
         for i in range(num_steps):
-            res.append(sess.run(n))
+            res.append(sess.run(get_next_ops))
         if measure_time:
             print(time.time() - start)
+        sess.run(save_checkpoint_ops)
+
+        aggregate_ckpt(local_ckpt_paths, global_ckpt_path)
+
+        if flatten:
+            res = [r[0] for r in res]
         return res
 
 def build_imagenet_input_pipeline(batch_size, num_workers, worker_id,
@@ -79,7 +103,7 @@ def build_imagenet_input_pipeline(batch_size, num_workers, worker_id,
             num_parallel_batches=num_splits))
     ds = ds.prefetch(buffer_size=num_splits)
     iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
-    return iterator.get_next()
+    return iterator
 
 def set_eq(list_1, list_2):
     eq = True

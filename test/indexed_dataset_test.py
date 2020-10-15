@@ -3,24 +3,24 @@ import numpy as np
 import pytest
 from functools import reduce
 
-from test_util import *
+import test_util
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_tensor_slices():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(10)))
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,1,2,3,4]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [5,6,7,8]
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     assert res == [9]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_flat_map():
     g = tf.Graph()
     with g.as_default():
@@ -28,21 +28,21 @@ def test_flat_map():
                                                  [9,10,11],[12,13,14],[15,16,17],
                                                  [18,19,20],[21,22,23],[24,25,26]])
         ds = ds.flat_map(tf.data.Dataset.from_tensor_slices)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,1,2,3,4]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [5,6,7,8]
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     assert res == [9]
-    res = run_steps(g, n, 9)
+    res = test_util.run_steps(g, iterator, 9)
     assert res == [10, 11, 12, 13, 14, 15,16,17, 18]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [19,20,21,22]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 5)
+        res = test_util.run_steps(g, iterator, 5)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_flat_map_and_flat_map():
     g = tf.Graph()
     with g.as_default():
@@ -51,21 +51,21 @@ def test_flat_map_and_flat_map():
                                                  [[18,19,20],[21,22,23],[24,25,26]]])
         ds = ds.flat_map(tf.data.Dataset.from_tensor_slices)
         ds = ds.flat_map(tf.data.Dataset.from_tensor_slices)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,1,2,3,4]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [5,6,7,8]
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     assert res == [9]
-    res = run_steps(g, n, 9)
+    res = test_util.run_steps(g, iterator, 9)
     assert res == [10,11,12,13,14,15,16,17,18]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [19,20,21,22]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 5)
+        res = test_util.run_steps(g, iterator, 5)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_interleave():
     g = tf.Graph()
     with g.as_default():
@@ -73,21 +73,21 @@ def test_interleave():
                                                  [9,10,11],[12,13,14],[15,16,17],
                                                  [18,19,20],[21,22,23],[24,25,26]])
         ds = ds.interleave(tf.data.Dataset.from_tensor_slices)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,3,6,9,12]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [15,18,21,24]
-    res = run_steps(g, n, 6)
+    res = test_util.run_steps(g, iterator, 6)
     assert res == [1,4,7,10,13,16]
-    res = run_steps(g, n, 9)
+    res = test_util.run_steps(g, iterator, 9)
     assert res == [19,22,25,2,5,8,11,14,17]
-    res = run_steps(g, n, 3)
+    res = test_util.run_steps(g, iterator, 3)
     assert res == [20,23,26]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_interleave_and_interleave():
     g = tf.Graph()
     with g.as_default():
@@ -96,50 +96,50 @@ def test_interleave_and_interleave():
                                                  [[18,19,20],[21,22,23],[24,25,26]]])
         ds = ds.interleave(tf.data.Dataset.from_tensor_slices)
         ds = ds.interleave(tf.data.Dataset.from_tensor_slices)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,9,18,3,12]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [21,6,15,24]
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     assert res == [1]
-    res = run_steps(g, n, 9)
+    res = test_util.run_steps(g, iterator, 9)
     assert res == [10,19,4,13,22,7,16,25,2]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [11,20,5,14]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 5)
+        res = test_util.run_steps(g, iterator, 5)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_map():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(10)))
         ds = ds.map(lambda x: 2*x)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,2,4,6,8]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [10,12,14,16]
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     assert res == [18]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_textline():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.TextLineDataset('example_data_0.txt')
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert [int(r) for r in res] == [0,1,2,3,4]
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     assert [int(r) for r in res] == [5,6,7,8,9]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_experimental_parallel_interleave():
     g = tf.Graph()
     with g.as_default():
@@ -148,202 +148,202 @@ def test_experimental_parallel_interleave():
         ds = ds.apply(
             tf.data.experimental.parallel_interleave(
                 tf.data.TextLineDataset, cycle_length=1))
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert [int(r) for r in res] == [0,1,2,3,4]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert [int(r) for r in res] == [5,6,7,8]
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     assert [int(r) for r in res] == [9]
-    res = run_steps(g, n, 9)
+    res = test_util.run_steps(g, iterator, 9)
     assert [int(r) for r in res] == [10,11,12,13,14,15,16,17,18]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 4)
+        res = test_util.run_steps(g, iterator, 4)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_batch():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(50)))
         ds = ds.batch(5)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 1)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 1)
     expected_result = [np.array(list(range(i*5, i*5+5))) for i in range(0, 1)]
     assert len(res) == len(expected_result)
     assert all([(r == e).all() for r, e in zip(res, expected_result)])
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     expected_result = [np.array(list(range(i*5, i*5+5))) for i in range(1, 6)]
     assert len(res) == len(expected_result)
     assert all([(r == e).all() for r, e in zip(res, expected_result)])
-    res = run_steps(g, n, 3)
+    res = test_util.run_steps(g, iterator, 3)
     expected_result = [np.array(list(range(i*5, i*5+5))) for i in range(6, 9)]
     assert len(res) == len(expected_result)
     assert all([(r == e).all() for r, e in zip(res, expected_result)])
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 2)
+        res = test_util.run_steps(g, iterator, 2)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_batch_and_batch():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(100)))
         ds = ds.batch(5)
         ds = ds.batch(2)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 1)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 1)
     expected_result = [np.array([list(range(i*5, i*5+5))
             for i in range(j*2, j*2+2)]) for j in range(0, 1)]
     assert len(res) == len(expected_result)
     assert all([(r == e).all() for r, e in zip(res, expected_result)])
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     expected_result = [np.array([list(range(i*5, i*5+5))
             for i in range(j*2, j*2+2)]) for j in range(1, 6)]
     assert len(res) == len(expected_result)
     assert all([(r == e).all() for r, e in zip(res, expected_result)])
-    res = run_steps(g, n, 3)
+    res = test_util.run_steps(g, iterator, 3)
     expected_result = [np.array([list(range(i*5, i*5+5))
             for i in range(j*2, j*2+2)]) for j in range(6, 9)]
     assert len(res) == len(expected_result)
     assert all([(r == e).all() for r, e in zip(res, expected_result)])
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 2)
+        res = test_util.run_steps(g, iterator, 2)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_zip():
     g = tf.Graph()
     with g.as_default():
         ds1 = tf.data.Dataset.from_tensor_slices(list(range(10)))
         ds2 = tf.data.Dataset.from_tensor_slices(list(range(9,-1,-1)))
         ds = tf.data.Dataset.zip((ds1, ds2))
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 2)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 2)
     assert res == [(0, 9), (1, 8)]
-    res = run_steps(g, n, 3)
+    res = test_util.run_steps(g, iterator, 3)
     assert res == [(2, 7), (3, 6), (4, 5)]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [(5, 4), (6, 3), (7, 2), (8, 1)]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 2)
+        res = test_util.run_steps(g, iterator, 2)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_shuffle():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(50)))
         ds = ds.shuffle(10)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
     res = []
-    res += run_steps(g, n, 5)
-    res += run_steps(g, n, 5)
-    res += run_steps(g, n, 6)
-    res += run_steps(g, n, 7)
-    res += run_steps(g, n, 8)
-    res += run_steps(g, n, 9)
-    res += run_steps(g, n, 10)
+    res += test_util.run_steps(g, iterator, 5)
+    res += test_util.run_steps(g, iterator, 5)
+    res += test_util.run_steps(g, iterator, 6)
+    res += test_util.run_steps(g, iterator, 7)
+    res += test_util.run_steps(g, iterator, 8)
+    res += test_util.run_steps(g, iterator, 9)
+    res += test_util.run_steps(g, iterator, 10)
     assert sorted(res) == list(range(50))
     assert list(set(sorted(res))) == sorted(res) # Assert no duplicate element
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_prefetch():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(20)))
         ds = ds.prefetch(20)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,1,2,3,4]
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [5,6,7,8,9]
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [10,11,12,13,14]
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [15,16,17,18,19]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_forever_repeat():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(10)))
         ds = ds.repeat()
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
     for _ in range(5):
-        res = run_steps(g, n, 5)
+        res = test_util.run_steps(g, iterator, 5)
         assert res == [0,1,2,3,4]
-        res = run_steps(g, n, 5)
+        res = test_util.run_steps(g, iterator, 5)
         assert res == [5,6,7,8,9]
-        res = run_steps(g, n, 3)
+        res = test_util.run_steps(g, iterator, 3)
         assert res == [0,1,2]
-        res = run_steps(g, n, 6)
+        res = test_util.run_steps(g, iterator, 6)
         assert res == [3,4,5,6,7,8]
-        res = run_steps(g, n, 4)
+        res = test_util.run_steps(g, iterator, 4)
         assert res == [9,0,1,2]
-        res = run_steps(g, n, 7)
+        res = test_util.run_steps(g, iterator, 7)
         assert res == [3,4,5,6,7,8,9]
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_finite_repeat():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(10)))
         ds = ds.repeat(3)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,1,2,3,4]
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [5,6,7,8,9]
-    res = run_steps(g, n, 3)
+    res = test_util.run_steps(g, iterator, 3)
     assert res == [0,1,2]
-    res = run_steps(g, n, 6)
+    res = test_util.run_steps(g, iterator, 6)
     assert res == [3,4,5,6,7,8]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [9,0,1,2]
-    res = run_steps(g, n, 7)
+    res = test_util.run_steps(g, iterator, 7)
     assert res == [3,4,5,6,7,8,9]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_repeat_and_shuffle():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(10)))
         ds = ds.repeat(3)
         ds = ds.shuffle(15)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
-    res += run_steps(g, n, 5)
-    res += run_steps(g, n, 3)
-    res += run_steps(g, n, 6)
-    res += run_steps(g, n, 4)
-    res += run_steps(g, n, 7)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
+    res += test_util.run_steps(g, iterator, 5)
+    res += test_util.run_steps(g, iterator, 3)
+    res += test_util.run_steps(g, iterator, 6)
+    res += test_util.run_steps(g, iterator, 4)
+    res += test_util.run_steps(g, iterator, 7)
     assert sorted(res) == sorted(list(range(10)) * 3)
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_shuffle_and_repeat():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(10)))
         ds = ds.shuffle(15)
         ds = ds.repeat(3)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
     res = []
-    res = run_steps(g, n, 5)
-    res += run_steps(g, n, 5)
-    res += run_steps(g, n, 3)
-    res += run_steps(g, n, 6)
-    res += run_steps(g, n, 4)
-    res += run_steps(g, n, 7)
+    res = test_util.run_steps(g, iterator, 5)
+    res += test_util.run_steps(g, iterator, 5)
+    res += test_util.run_steps(g, iterator, 3)
+    res += test_util.run_steps(g, iterator, 6)
+    res += test_util.run_steps(g, iterator, 4)
+    res += test_util.run_steps(g, iterator, 7)
     assert sorted(res) == sorted(list(range(10)) * 3)
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_shard():
     g = tf.Graph()
     with g.as_default():
@@ -351,16 +351,16 @@ def test_shard():
         ds2 = tf.data.Dataset.from_tensor_slices(list(range(20)))
         ds1 = ds1.shard(2, 0)
         ds2 = ds2.shard(2, 1)
-        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
-        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
-    res = run_steps(g, [n1, n2], 5)
+        iterator_1 = tf.compat.v1.data.make_one_shot_iterator(ds1)
+        iterator_2 = tf.compat.v1.data.make_one_shot_iterator(ds2)
+    res = test_util.run_steps(g, [iterator_1, iterator_2], 5)
     assert res == [[0,1],[2,3],[4,5],[6,7],[8,9]]
-    res = run_steps(g, [n1, n2], 4)
+    res = test_util.run_steps(g, [iterator_1, iterator_2], 4)
     assert res == [[10,11],[12,13],[14,15],[16,17]]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, [n1, n2], 2)
+        res = test_util.run_steps(g, [iterator_1, iterator_2], 2)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_scale_out():
     g = tf.Graph()
     with g.as_default():
@@ -368,9 +368,9 @@ def test_scale_out():
         ds2 = tf.data.Dataset.from_tensor_slices(list(range(20)))
         ds1 = ds1.shard(2, 0)
         ds2 = ds2.shard(2, 1)
-        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
-        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
-    res = run_steps(g, [n1, n2], 5)
+        iterator_1 = tf.compat.v1.data.make_one_shot_iterator(ds1)
+        iterator_2 = tf.compat.v1.data.make_one_shot_iterator(ds2)
+    res = test_util.run_steps(g, [iterator_1, iterator_2], 5)
     assert res == [[0,1],[2,3],[4,5],[6,7],[8,9]]
     g = tf.Graph()
     with g.as_default():
@@ -380,15 +380,15 @@ def test_scale_out():
         ds1 = ds1.shard(3, 0)
         ds2 = ds2.shard(3, 1)
         ds3 = ds3.shard(3, 2)
-        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
-        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
-        n3 = tf.compat.v1.data.make_one_shot_iterator(ds3).get_next()
-    res = run_steps(g, [n1, n2, n3], 3)
+        iterator_1 = tf.compat.v1.data.make_one_shot_iterator(ds1)
+        iterator_2 = tf.compat.v1.data.make_one_shot_iterator(ds2)
+        iterator_3 = tf.compat.v1.data.make_one_shot_iterator(ds3)
+    res = test_util.run_steps(g, [iterator_1, iterator_2, iterator_3], 3)
     assert [sorted(r) for r in res] == [[10,11,12],[13,14,15],[16,17,18]]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, [n1, n2, n3], 1)
+        res = test_util.run_steps(g, [iterator_1, iterator_2, iterator_3], 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_scale_in():
     g = tf.Graph()
     with g.as_default():
@@ -398,10 +398,10 @@ def test_scale_in():
         ds1 = ds1.shard(3, 0)
         ds2 = ds2.shard(3, 1)
         ds3 = ds3.shard(3, 2)
-        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
-        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
-        n3 = tf.compat.v1.data.make_one_shot_iterator(ds3).get_next()
-    res = run_steps(g, [n1, n2, n3], 3)
+        iterator_1 = tf.compat.v1.data.make_one_shot_iterator(ds1)
+        iterator_2 = tf.compat.v1.data.make_one_shot_iterator(ds2)
+        iterator_3 = tf.compat.v1.data.make_one_shot_iterator(ds3)
+    res = test_util.run_steps(g, [iterator_1, iterator_2, iterator_3], 3)
     assert res == [[0,1,2],[3,4,5],[6,7,8]]
     g = tf.Graph()
     with g.as_default():
@@ -409,46 +409,46 @@ def test_scale_in():
         ds2 = tf.data.Dataset.from_tensor_slices(list(range(20)))
         ds1 = ds1.shard(2, 0)
         ds2 = ds2.shard(2, 1)
-        n1 = tf.compat.v1.data.make_one_shot_iterator(ds1).get_next()
-        n2 = tf.compat.v1.data.make_one_shot_iterator(ds2).get_next()
-    res = run_steps(g, [n1, n2], 5)
+        iterator_1 = tf.compat.v1.data.make_one_shot_iterator(ds1)
+        iterator_2 = tf.compat.v1.data.make_one_shot_iterator(ds2)
+    res = test_util.run_steps(g, [iterator_1, iterator_2], 5)
     assert [sorted(r) for r in res] == [[9,10],[11,12],[13,14],[15,16],[17,18]]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, [n1, n2], 1)
+        res = test_util.run_steps(g, [iterator_1, iterator_2], 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_cache():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(10)))
         ds = ds.cache()
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,1,2,3,4]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [5,6,7,8]
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     assert res == [9]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_take():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(10)))
         ds = ds.take(5)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 1)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 1)
     assert res == [0]
-    res = run_steps(g, n, 3)
+    res = test_util.run_steps(g, iterator, 3)
     assert res == [1,2,3]
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     assert res == [4]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_tf_record_iterleave():
     g = tf.Graph()
     with g.as_default():
@@ -459,11 +459,11 @@ def test_tf_record_iterleave():
         ds = tf.data.TFRecordDataset.list_files(file_names)
         ds = ds.interleave(tf.data.TFRecordDataset)
         iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
-        n = iterator.get_next()
+        iterator = iterator
 
-    run_steps(g, n, 1)
+    test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_tf_record_experimental_iterleave():
     g = tf.Graph()
     with g.as_default():
@@ -475,11 +475,11 @@ def test_tf_record_experimental_iterleave():
             tf.data.experimental.parallel_interleave(
                 tf.data.TFRecordDataset, cycle_length=1))
         iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
-        n = iterator.get_next()
+        iterator = iterator
 
-    run_steps(g, n, 10)
+    test_util.run_steps(g, iterator, 10)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_interleave_and_prefetch():
     g = tf.Graph()
     with g.as_default():
@@ -488,40 +488,40 @@ def test_interleave_and_prefetch():
                                                  [18,19,20],[21,22,23],[24,25,26]])
         ds = ds.interleave(tf.data.Dataset.from_tensor_slices)
         ds = ds.prefetch(10)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,3,6,9,12]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [15,18,21,24]
-    res = run_steps(g, n, 6)
+    res = test_util.run_steps(g, iterator, 6)
     assert res == [1,4,7,10,13,16]
-    res = run_steps(g, n, 9)
+    res = test_util.run_steps(g, iterator, 9)
     assert res == [19,22,25,2,5,8,11,14,17]
-    res = run_steps(g, n, 3)
+    res = test_util.run_steps(g, iterator, 3)
     assert res == [20,23,26]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_prefetch_and_prefetch():
     g = tf.Graph()
     with g.as_default():
         ds = tf.data.Dataset.from_tensor_slices(list(range(20)))
         ds = ds.prefetch(10)
         ds = ds.prefetch(10)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,1,2,3,4]
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [5,6,7,8,9]
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [10,11,12,13,14]
-    res = run_steps(g, n, 5)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [15,16,17,18,19]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_parallel_interleave():
     g = tf.Graph()
     with g.as_default():
@@ -530,21 +530,21 @@ def test_parallel_interleave():
                                                  [18,19,20],[21,22,23],[24,25,26]])
         ds = ds.interleave(tf.data.Dataset.from_tensor_slices,
                            num_parallel_calls=4)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 5)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 5)
     assert res == [0,3,6,9,12]
-    res = run_steps(g, n, 4)
+    res = test_util.run_steps(g, iterator, 4)
     assert res == [15,18,21,24]
-    res = run_steps(g, n, 6)
+    res = test_util.run_steps(g, iterator, 6)
     assert res == [1,4,7,10,13,16]
-    res = run_steps(g, n, 9)
+    res = test_util.run_steps(g, iterator, 9)
     assert res == [19,22,25,2,5,8,11,14,17]
-    res = run_steps(g, n, 3)
+    res = test_util.run_steps(g, iterator, 3)
     assert res == [20,23,26]
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_experimental_map_and_batch():
     g = tf.Graph()
     with g.as_default():
@@ -556,23 +556,23 @@ def test_experimental_map_and_batch():
                 map_func=lambda x:10*x,
                 batch_size=5,
                 num_parallel_batches=2))
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
-    res = run_steps(g, n, 1)
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
+    res = test_util.run_steps(g, iterator, 1)
     expected_result = [np.array([0,10,20,30,40])]
     assert all(all(r == e) for r, e in zip(res, expected_result))
-    res = run_steps(g, n, 2)
+    res = test_util.run_steps(g, iterator, 2)
     expected_result = [np.array([50,60,70,80,90]),np.array([100,110,120,130,140])]
     assert all(all(r == e) for r, e in zip(res, expected_result))
-    res = run_steps(g, n, 2)
+    res = test_util.run_steps(g, iterator, 2)
     expected_result = [np.array([150,160,170,180,190]),np.array([200,210,220,230,240])]
     assert all(all(r == e) for r, e in zip(res, expected_result))
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     expected_result = [np.array([250,260])]
     assert all(all(r == e) for r, e in zip(res, expected_result))
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
 
-@initialize_ckpt
+@test_util.initialize_ckpt
 def test_map_and_batch():
     g = tf.Graph()
     with g.as_default():
@@ -581,19 +581,23 @@ def test_map_and_batch():
                                                  18,19,20,21,22,23,24,25,26])
         ds = ds.map(lambda x:10*x)
         ds = ds.batch(5)
-        n = tf.compat.v1.data.make_one_shot_iterator(ds).get_next()
+        iterator = tf.compat.v1.data.make_one_shot_iterator(ds)
 
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     expected_result = [np.array([0,10,20,30,40])]
     assert all(all(r == e) for r, e in zip(res, expected_result))
-    res = run_steps(g, n, 2)
+    res = test_util.run_steps(g, iterator, 2)
     expected_result = [np.array([50,60,70,80,90]),np.array([100,110,120,130,140])]
     assert all(all(r == e) for r, e in zip(res, expected_result))
-    res = run_steps(g, n, 2)
+    res = test_util.run_steps(g, iterator, 2)
     expected_result = [np.array([150,160,170,180,190]),np.array([200,210,220,230,240])]
     assert all(all(r == e) for r, e in zip(res, expected_result))
-    res = run_steps(g, n, 1)
+    res = test_util.run_steps(g, iterator, 1)
     expected_result = [np.array([250,260])]
     assert all(all(r == e) for r, e in zip(res, expected_result))
     with pytest.raises(tf.errors.OutOfRangeError):
-        res = run_steps(g, n, 1)
+        res = test_util.run_steps(g, iterator, 1)
+
+
+if __name__ == '__main__':
+    test_tensor_slices()
